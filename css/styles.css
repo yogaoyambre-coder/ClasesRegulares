@@ -1,0 +1,271 @@
+:root {
+  --bg: #f5f4f2;
+  --card: #ffffff;
+  --text: #26241f;
+  --muted: #7a776e;
+  --primary: #3f6b52;
+  --primary-dark: #2f5140;
+  --danger: #b3452f;
+  --border: #e4e1da;
+  --ok-bg: #e7f2ea;
+  --pend-bg: #fbeee7;
+  --radius: 14px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+#app {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 16px 16px 80px;
+  min-height: 100vh;
+}
+
+header.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+header.app-header h1 {
+  font-size: 1.1rem;
+  margin: 0;
+}
+
+.pill-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.pill {
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.pill.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+input[type="month"] {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  font-size: 1rem;
+  margin-bottom: 16px;
+  background: var(--card);
+  color: var(--text);
+}
+
+.section-title {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin: 20px 0 8px;
+}
+
+.card {
+  background: var(--card);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  padding: 14px;
+  margin-bottom: 10px;
+}
+
+.alumno-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.alumno-card.pagado {
+  background: var(--ok-bg);
+}
+
+.alumno-card.pendiente {
+  background: var(--pend-bg);
+}
+
+.alumno-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.alumno-nombre {
+  font-weight: 600;
+  font-size: 1.02rem;
+}
+
+.alumno-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.importe-input {
+  width: 80px;
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  font-size: 1rem;
+  text-align: right;
+}
+
+.checkbox-pagado {
+  width: 26px;
+  height: 26px;
+  accent-color: var(--primary);
+}
+
+.alumno-meta {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.btn {
+  border: none;
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: #fff;
+}
+
+.btn-primary:active {
+  background: var(--primary-dark);
+}
+
+.btn-secondary {
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.btn-danger-link {
+  background: none;
+  border: none;
+  color: var(--danger);
+  font-size: 0.85rem;
+  padding: 4px;
+  cursor: pointer;
+}
+
+.btn-block {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.top-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.back-link {
+  background: none;
+  border: none;
+  color: var(--primary);
+  font-size: 1rem;
+  padding: 6px 0;
+  cursor: pointer;
+}
+
+.empty-state {
+  color: var(--muted);
+  text-align: center;
+  padding: 24px 0;
+  font-size: 0.95rem;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 10;
+}
+
+.modal-sheet {
+  background: var(--card);
+  width: 100%;
+  max-width: 480px;
+  border-radius: 20px 20px 0 0;
+  padding: 20px 20px 28px;
+}
+
+.modal-sheet h2 {
+  margin-top: 0;
+  font-size: 1.1rem;
+}
+
+.field {
+  margin-bottom: 14px;
+}
+
+.field label {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.field input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  font-size: 1rem;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--text);
+  color: #fff;
+  padding: 10px 18px;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  z-index: 20;
+}
+
+.resumen-mes {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
