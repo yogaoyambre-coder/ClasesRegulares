@@ -27,12 +27,22 @@ function getSheet_(name) {
   return sheet;
 }
 
+// Google Sheets guarda "horas" y "fechas" como objetos Date internos aunque
+// se vean como texto. Los normalizamos aquí para no devolver ISO-UTC crudo.
+function formatearValor_(header, value) {
+  if (!(value instanceof Date)) return value;
+  const tz = Session.getScriptTimeZone();
+  if (header === 'Hora') return Utilities.formatDate(value, tz, 'HH:mm');
+  if (header === 'Mes') return Utilities.formatDate(value, tz, 'yyyy-MM');
+  return Utilities.formatDate(value, tz, 'yyyy-MM-dd');
+}
+
 function sheetToObjects_(sheet) {
   const data = sheet.getDataRange().getValues();
   const headers = data.shift();
   return data.map(function (row) {
     const obj = {};
-    headers.forEach(function (h, i) { obj[h] = row[i]; });
+    headers.forEach(function (h, i) { obj[h] = formatearValor_(h, row[i]); });
     return obj;
   });
 }
@@ -153,7 +163,7 @@ function setPago(body) {
   const idxNotas = headers.indexOf('Notas');
 
   for (let i = 1; i < data.length; i++) {
-    if (data[i][idxMes] === body.mes && data[i][idxId] === body.idAlumno) {
+    if (formatearValor_('Mes', data[i][idxMes]) === body.mes && String(data[i][idxId]) === String(body.idAlumno)) {
       sheet.getRange(i + 1, idxImporte + 1).setValue(body.importe);
       sheet.getRange(i + 1, idxPagado + 1).setValue(body.pagado);
       sheet.getRange(i + 1, idxFecha + 1).setValue(body.fechaPago || '');
@@ -190,7 +200,7 @@ function bajaAlumno(id, fechaBaja) {
   const idxBaja = headers.indexOf('FechaBaja');
 
   for (let i = 1; i < data.length; i++) {
-    if (data[i][idxId] === id) {
+    if (String(data[i][idxId]) === String(id)) {
       sheet.getRange(i + 1, idxEstado + 1).setValue('baja');
       sheet.getRange(i + 1, idxBaja + 1).setValue(fechaBaja || new Date());
       return { updated: true };
