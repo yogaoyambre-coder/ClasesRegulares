@@ -85,7 +85,7 @@ function doGet(e) {
     let result;
     switch (action) {
       case 'ping':
-        result = { version: 'v5-clientes', ahora: new Date().toISOString() };
+        result = { version: 'v6-editar-cliente', ahora: new Date().toISOString() };
         break;
       case 'getClientes':
         result = getClientes();
@@ -119,11 +119,17 @@ function doPost(e) {
       case 'addCliente':
         result = addCliente(body);
         break;
+      case 'actualizarCliente':
+        result = actualizarCliente(body);
+        break;
       case 'addInscripcion':
         result = addInscripcion(body);
         break;
       case 'bajaInscripcion':
         result = bajaInscripcion(body.id, body.fechaBaja);
+        break;
+      case 'reactivarInscripcion':
+        result = reactivarInscripcion(body.id);
         break;
       case 'setPago':
         result = setPago(body);
@@ -164,6 +170,28 @@ function addCliente(body) {
   };
   appendRow_(sheet, nuevo);
   return nuevo;
+}
+
+function actualizarCliente(body) {
+  const sheet = getSheet_(SHEET_CLIENTES);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const idxId = headers.indexOf('ID');
+  const idxNombre = headers.indexOf('Nombre');
+  const idxApellidos = headers.indexOf('Apellidos');
+  const idxTelefono = headers.indexOf('Telefono');
+  const idxNotas = headers.indexOf('Notas');
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idxId]) === String(body.id)) {
+      if (body.nombre !== undefined) sheet.getRange(i + 1, idxNombre + 1).setValue(body.nombre);
+      if (body.apellidos !== undefined) sheet.getRange(i + 1, idxApellidos + 1).setValue(body.apellidos);
+      if (body.telefono !== undefined) sheet.getRange(i + 1, idxTelefono + 1).setValue(body.telefono);
+      if (body.notas !== undefined) sheet.getRange(i + 1, idxNotas + 1).setValue(body.notas);
+      return { updated: true };
+    }
+  }
+  throw new Error('Cliente no encontrado');
 }
 
 function getInscripciones() {
@@ -208,6 +236,24 @@ function bajaInscripcion(id, fechaBaja) {
     if (String(data[i][idxId]) === String(id)) {
       sheet.getRange(i + 1, idxEstado + 1).setValue('baja');
       sheet.getRange(i + 1, idxBaja + 1).setValue(fechaBaja || new Date());
+      return { updated: true };
+    }
+  }
+  throw new Error('Inscripción no encontrada');
+}
+
+function reactivarInscripcion(id) {
+  const sheet = getSheet_(SHEET_INSCRIPCIONES);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const idxId = headers.indexOf('ID');
+  const idxEstado = headers.indexOf('Estado');
+  const idxBaja = headers.indexOf('FechaBaja');
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idxId]) === String(id)) {
+      sheet.getRange(i + 1, idxEstado + 1).setValue('activo');
+      sheet.getRange(i + 1, idxBaja + 1).setValue('');
       return { updated: true };
     }
   }
