@@ -13,7 +13,7 @@
  *    - Quién tiene acceso: Cualquier usuario
  */
 
-const SS_ID = 'PON_AQUI_EL_ID_DE_TU_GOOGLE_SHEET';
+const SS_ID = '1BAXS6x2qk6GPI5-kmN3LPqtdPntm2g0ex8qQt0IALeY';
 const SHEET_ALUMNOS = 'Alumnos';
 const SHEET_PAGOS = 'Pagos';
 
