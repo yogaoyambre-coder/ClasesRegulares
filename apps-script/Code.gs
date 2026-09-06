@@ -63,6 +63,9 @@ function doGet(e) {
     const action = e.parameter.action;
     let result;
     switch (action) {
+      case 'ping':
+        result = { version: 'v2-formatearValor', ahora: new Date().toISOString() };
+        break;
       case 'getAlumnos':
         result = getAlumnos();
         break;
