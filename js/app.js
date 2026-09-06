@@ -20,7 +20,9 @@ const state = {
   fechasGuardadas: [], // fechas de sesiones ya usadas para el horario/mes actual
   sesionFecha: null,
   asistencias: [],
-  cargando: false
+  cargando: false,
+  filtroCentro: '', // filtro del módulo Clientes
+  filtroHorario: null // { dia, hora } | null
 };
 
 function mesActual() {
@@ -187,6 +189,26 @@ function render() {
     });
   }
 
+  if (state.modulo === 'clientes') {
+    document.getElementById('filtro-centro').addEventListener('change', function (e) {
+      state.filtroCentro = e.target.value;
+      state.filtroHorario = null;
+      render();
+    });
+    const selHorario = document.getElementById('filtro-horario');
+    if (selHorario) {
+      selHorario.addEventListener('change', function (e) {
+        if (!e.target.value) {
+          state.filtroHorario = null;
+        } else {
+          const partes = e.target.value.split('|');
+          state.filtroHorario = { dia: partes[0], hora: partes[1] };
+        }
+        render();
+      });
+    }
+  }
+
   bindScreenEvents();
 }
 
@@ -204,12 +226,47 @@ function renderScreen() {
 
 // --- Clientes ---
 
+function inscripcionesDeCliente(idCliente) {
+  return state.alumnos.filter(function (a) { return String(a.ID_Cliente) === String(idCliente); });
+}
+
+function clienteCoincideFiltro(cliente) {
+  if (!state.filtroCentro && !state.filtroHorario) return true;
+  return inscripcionesDeCliente(cliente.ID).some(function (i) {
+    if (state.filtroCentro && i.Centro !== state.filtroCentro) return false;
+    if (state.filtroHorario && (i.Dia !== state.filtroHorario.dia || i.Hora !== state.filtroHorario.hora)) return false;
+    return true;
+  });
+}
+
 function renderClientes() {
-  const clientes = state.clientes.slice().sort(function (a, b) { return a.Nombre.localeCompare(b.Nombre); });
+  const clientes = state.clientes
+    .filter(clienteCoincideFiltro)
+    .sort(function (a, b) { return a.Nombre.localeCompare(b.Nombre); });
+  const horariosDisponibles = state.filtroCentro ? horariosDeCentro(state.filtroCentro) : [];
+
   return '' +
+    '<div class="pill-row">' +
+      '<select class="select-estado" id="filtro-centro">' +
+        '<option value="">Todos los centros</option>' +
+        CENTROS.map(function (c) {
+          return '<option value="' + c + '"' + (state.filtroCentro === c ? ' selected' : '') + '>' + c + '</option>';
+        }).join('') +
+      '</select>' +
+      (state.filtroCentro
+        ? '<select class="select-estado" id="filtro-horario">' +
+          '<option value="">Todos los horarios</option>' +
+          horariosDisponibles.map(function (h) {
+            const valor = h.dia + '|' + h.hora;
+            const sel = state.filtroHorario && state.filtroHorario.dia === h.dia && state.filtroHorario.hora === h.hora;
+            return '<option value="' + valor + '"' + (sel ? ' selected' : '') + '>' + h.dia + ' ' + h.hora + '</option>';
+          }).join('') +
+          '</select>'
+        : '') +
+    '</div>' +
     '<div class="section-title">Clientes (' + clientes.length + ')</div>' +
     (clientes.length === 0
-      ? '<p class="empty-state">Todavía no hay clientes.</p>'
+      ? '<p class="empty-state">No hay clientes con ese filtro.</p>'
       : clientes.map(renderClienteCard).join('')) +
     '<button class="btn btn-primary btn-block" data-accion="abrir-nuevo-cliente">+ Nuevo cliente</button>';
 }
