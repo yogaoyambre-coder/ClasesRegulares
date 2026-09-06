@@ -223,7 +223,7 @@ function bindScreenEvents() {
 }
 
 async function actualizarPago(idAlumno, cambios) {
-  const pago = state.pagos.find(function (p) { return p.ID_Alumno === idAlumno; });
+  const pago = state.pagos.find(function (p) { return String(p.ID_Alumno) === String(idAlumno); });
   if (!pago) return;
   Object.assign(pago, cambios);
   try {

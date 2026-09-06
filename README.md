@@ -45,6 +45,8 @@ Rellena la pestaña "Alumnos" con tus alumnos actuales (Estado = `activo`, Fecha
    - Quién tiene acceso: **Cualquier usuario**
 5. Copia la URL que termina en `/exec`.
 
+> **Actualizar el código más adelante:** cuando cambies `Code.gs`, no confíes en editar la implementación existente y elegir "Nueva versión" en Gestionar implementaciones — en la práctica ha resultado poco fiable (a veces no recoge el código nuevo sin avisar). Es más seguro crear cada vez una **Nueva implementación** desde cero (Implementar → Nueva implementación) y actualizar `API_URL` con la URL nueva. Para verificar rápido que una URL está sirviendo el código actual, hay un endpoint de diagnóstico: `TU_URL/exec?action=ping`, que devuelve un campo `version` que se actualiza en el código.
+
 ### 3. Conecta el frontend
 
 Abre [`js/api.js`](js/api.js) y sustituye:
