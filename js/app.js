@@ -217,7 +217,10 @@ function renderClientes() {
 function renderClienteCard(c) {
   return '' +
     '<div class="card">' +
-      '<div class="alumno-nombre">' + c.Nombre + (c.Apellidos ? ' ' + c.Apellidos : '') + '</div>' +
+      '<div class="alumno-top">' +
+        '<span class="alumno-nombre">' + c.Nombre + (c.Apellidos ? ' ' + c.Apellidos : '') + '</span>' +
+        '<button class="back-link" data-accion="editar-cliente" data-id="' + c.ID + '">Editar</button>' +
+      '</div>' +
       (c.Telefono ? '<div class="alumno-meta">' + c.Telefono + '</div>' : '') +
       (c.Notas ? '<div class="alumno-meta">' + c.Notas + '</div>' : '') +
     '</div>';
@@ -452,6 +455,10 @@ function bindScreenEvents() {
       el.addEventListener('click', function () {
         abrirModalNuevoCliente();
       });
+    } else if (accion === 'editar-cliente') {
+      el.addEventListener('click', function () {
+        abrirModalEditarCliente(el.dataset.id);
+      });
     }
   });
 }
@@ -644,6 +651,51 @@ function abrirModalNuevoCliente() {
     try {
       await apiPost('addCliente', { nombre: nombre, apellidos: apellidos, telefono: telefono, notas: notas });
       mostrarToast('Cliente creado');
+      overlay.remove();
+      await cargarClientes();
+      render();
+    } catch (err) {
+      mostrarToast('Error: ' + err.message);
+    }
+  });
+}
+
+// --- Modal: editar cliente existente ---
+
+function abrirModalEditarCliente(id) {
+  const cliente = state.clientes.find(function (c) { return String(c.ID) === String(id); });
+  if (!cliente) return;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = '' +
+    '<div class="modal-sheet">' +
+      '<h2>Editar cliente</h2>' +
+      '<div class="field"><label>Nombre</label><input type="text" id="cli-nombre" value="' + (cliente.Nombre || '') + '"></div>' +
+      '<div class="field"><label>Apellidos</label><input type="text" id="cli-apellidos" value="' + (cliente.Apellidos || '') + '"></div>' +
+      '<div class="field"><label>Teléfono</label><input type="text" id="cli-telefono" value="' + (cliente.Telefono || '') + '"></div>' +
+      '<div class="field"><label>Notas</label><input type="text" id="cli-notas" value="' + (cliente.Notas || '') + '"></div>' +
+      '<p class="alumno-meta">Si cambias el nombre/apellidos, las inscripciones ya creadas no se actualizan solas (Cobros/Asistencia seguirán mostrando el nombre con el que se dieron de alta).</p>' +
+      '<div class="modal-actions">' +
+        '<button class="btn btn-secondary" id="cancelar-cliente">Cancelar</button>' +
+        '<button class="btn btn-primary" id="confirmar-cliente-btn">Guardar cambios</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+
+  document.getElementById('cancelar-cliente').addEventListener('click', function () { overlay.remove(); });
+  document.getElementById('confirmar-cliente-btn').addEventListener('click', async function () {
+    const nombre = document.getElementById('cli-nombre').value.trim();
+    const apellidos = document.getElementById('cli-apellidos').value.trim();
+    const telefono = document.getElementById('cli-telefono').value.trim();
+    const notas = document.getElementById('cli-notas').value.trim();
+    if (!nombre) {
+      mostrarToast('Escribe al menos el nombre');
+      return;
+    }
+    try {
+      await apiPost('actualizarCliente', { id: id, nombre: nombre, apellidos: apellidos, telefono: telefono, notas: notas });
+      mostrarToast('Cliente actualizado');
       overlay.remove();
       await cargarClientes();
       render();

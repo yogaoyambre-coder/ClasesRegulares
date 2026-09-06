@@ -219,6 +219,10 @@ function getInscripciones() {
   return sheetToObjects_(getSheet_(SHEET_INSCRIPCIONES));
 }
 
+function nombreCompletoCliente_(cliente) {
+  return cliente.Apellidos ? cliente.Nombre + ' ' + cliente.Apellidos : cliente.Nombre;
+}
+
 function addInscripcion(body) {
   const clientes = getClientes();
   const cliente = clientes.find(function (c) { return String(c.ID) === String(body.idCliente); });
@@ -228,11 +232,7 @@ function addInscripcion(body) {
   const nueva = {
     ID: Utilities.getUuid(),
     ID_Cliente: cliente.ID,
-    // Solo el nombre, sin apellidos: en Cobros/Asistencia sobra (ya se ve
-    // el centro/día/hora en la propia inscripción), y si los apellidos se
-    // usan como indicativo de horario en vez de apellido real, concatenar
-    // queda confuso ("Jose Angel SV L 18:30").
-    Nombre: cliente.Nombre,
+    Nombre: nombreCompletoCliente_(cliente),
     Centro: body.centro,
     Dia: body.dia,
     Hora: body.hora,
