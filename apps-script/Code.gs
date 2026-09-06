@@ -1,12 +1,13 @@
 /**
- * API de la app de Cobros — Google Apps Script
+ * API de la app de Cobros y Asistencia — Google Apps Script
  *
  * Antes de desplegar:
  * 1. Sustituye SS_ID por el ID de tu Google Sheet (está en la URL de la hoja).
- * 2. La hoja debe tener dos pestañas con estas cabeceras exactas en la fila 1:
+ * 2. La hoja debe tener tres pestañas con estas cabeceras exactas en la fila 1:
  *
- *    "Alumnos": ID | Nombre | Centro | Dia | Hora | PrecioDefecto | Estado | FechaAlta | FechaBaja
- *    "Pagos":   Mes | ID_Alumno | Nombre | Centro | Dia | Hora | Importe | Pagado | FechaPago | Notas
+ *    "Alumnos":    ID | Nombre | Centro | Dia | Hora | PrecioDefecto | Estado | FechaAlta | FechaBaja
+ *    "Pagos":      Mes | ID_Alumno | Nombre | Centro | Dia | Hora | Importe | Pagado | FechaPago | Notas
+ *    "Asistencia": ID | Fecha | ID_Alumno | Nombre | Centro | Dia | Hora | Tipo | Estado | Notas
  *
  * 3. Implementar > Nueva implementación > Aplicación web
  *    - Ejecutar como: Yo
@@ -16,6 +17,7 @@
 const SS_ID = '1BAXS6x2qk6GPI5-kmN3LPqtdPntm2g0ex8qQt0IALeY';
 const SHEET_ALUMNOS = 'Alumnos';
 const SHEET_PAGOS = 'Pagos';
+const SHEET_ASISTENCIA = 'Asistencia';
 
 function getSS_() {
   return SpreadsheetApp.openById(SS_ID);
@@ -70,13 +72,19 @@ function doGet(e) {
     let result;
     switch (action) {
       case 'ping':
-        result = { version: 'v3-esFecha', ahora: new Date().toISOString() };
+        result = { version: 'v4-asistencia', ahora: new Date().toISOString() };
         break;
       case 'getAlumnos':
         result = getAlumnos();
         break;
       case 'getPagosMes':
         result = getPagosMes(e.parameter.mes);
+        break;
+      case 'getAsistencia':
+        result = getAsistenciaFecha(e.parameter.fecha, e.parameter.centro, e.parameter.dia, e.parameter.hora);
+        break;
+      case 'getFechasSesion':
+        result = getFechasSesionesGuardadas(e.parameter.centro, e.parameter.dia, e.parameter.hora, e.parameter.mes);
         break;
       default:
         throw new Error('Acción GET no reconocida: ' + action);
@@ -100,6 +108,15 @@ function doPost(e) {
         break;
       case 'setPago':
         result = setPago(body);
+        break;
+      case 'setAsistencia':
+        result = setAsistencia(body);
+        break;
+      case 'addAsistente':
+        result = addAsistente(body);
+        break;
+      case 'cancelarSesion':
+        result = cancelarSesion(body);
         break;
       default:
         throw new Error('Acción POST no reconocida: ' + body.action);
@@ -216,4 +233,130 @@ function bajaAlumno(id, fechaBaja) {
     }
   }
   throw new Error('Alumno no encontrado');
+}
+
+/**
+ * Devuelve la asistencia de una sesión concreta (Fecha+Centro+Dia+Hora).
+ * Genera automáticamente las filas "regular" que falten, comprobando la
+ * fecha de alta/baja de cada alumno contra la fecha exacta de la sesión
+ * (no el mes completo, a diferencia de Pagos). Esto es lo que hace que
+ * una baja en Cobros se refleje sola en cualquier sesión futura: si ya
+ * existía una fila "regular" pendiente para alguien que después causó
+ * baja, se descarta aquí en vez de mostrarla.
+ */
+function getAsistenciaFecha(fecha, centro, dia, hora) {
+  const sheet = getSheet_(SHEET_ASISTENCIA);
+  let filas = sheetToObjects_(sheet).filter(function (f) {
+    return f.Fecha === fecha && f.Centro === centro && f.Dia === dia && f.Hora === hora;
+  });
+
+  const fechaSesion = new Date(fecha);
+  const activos = getAlumnos().filter(function (a) {
+    if (a.Centro !== centro || a.Dia !== dia || a.Hora !== hora) return false;
+    const alta = a.FechaAlta ? new Date(a.FechaAlta) : null;
+    const baja = a.FechaBaja ? new Date(a.FechaBaja) : null;
+    if (alta && alta > fechaSesion) return false;
+    if (baja && baja <= fechaSesion) return false;
+    return true;
+  });
+
+  const idsActivos = {};
+  activos.forEach(function (a) { idsActivos[a.ID] = true; });
+  // Descarta filas "regular" de alumnos que ya no estén activos en esta fecha
+  // (por ejemplo, una baja registrada después de haber abierto esta sesión).
+  filas = filas.filter(function (f) { return f.Tipo !== 'regular' || idsActivos[String(f.ID_Alumno)]; });
+
+  const idsConFila = {};
+  filas.forEach(function (f) { if (f.Tipo === 'regular') idsConFila[String(f.ID_Alumno)] = true; });
+
+  const nuevos = activos.filter(function (a) { return !idsConFila[String(a.ID)]; });
+  nuevos.forEach(function (a) {
+    const nueva = {
+      ID: Utilities.getUuid(),
+      Fecha: fecha,
+      ID_Alumno: a.ID,
+      Nombre: a.Nombre,
+      Centro: centro,
+      Dia: dia,
+      Hora: hora,
+      Tipo: 'regular',
+      Estado: 'pendiente',
+      Notas: ''
+    };
+    appendRow_(sheet, nueva);
+    filas.push(nueva);
+  });
+
+  return filas;
+}
+
+/**
+ * Fechas (YYYY-MM-DD) de un mes en las que ya existe algún registro de
+ * asistencia para ese centro/horario — incluye tanto sesiones regulares ya
+ * abiertas como sesiones extra (clases movidas) añadidas a mano.
+ */
+function getFechasSesionesGuardadas(centro, dia, hora, mes) {
+  const filas = sheetToObjects_(getSheet_(SHEET_ASISTENCIA)).filter(function (f) {
+    return f.Centro === centro && f.Dia === dia && f.Hora === hora && String(f.Fecha).indexOf(mes) === 0;
+  });
+  const fechas = {};
+  filas.forEach(function (f) { fechas[f.Fecha] = true; });
+  return Object.keys(fechas).sort();
+}
+
+function setAsistencia(body) {
+  const sheet = getSheet_(SHEET_ASISTENCIA);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const idxId = headers.indexOf('ID');
+  const idxEstado = headers.indexOf('Estado');
+  const idxNotas = headers.indexOf('Notas');
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idxId]) === String(body.id)) {
+      if (body.estado !== undefined) sheet.getRange(i + 1, idxEstado + 1).setValue(body.estado);
+      if (body.notas !== undefined) sheet.getRange(i + 1, idxNotas + 1).setValue(body.notas);
+      return { updated: true };
+    }
+  }
+  throw new Error('No se encontró ese registro de asistencia');
+}
+
+// Persona puntual (recuperación / clase suelta / prueba) añadida a una sesión.
+function addAsistente(body) {
+  const sheet = getSheet_(SHEET_ASISTENCIA);
+  const nueva = {
+    ID: Utilities.getUuid(),
+    Fecha: body.fecha,
+    ID_Alumno: '',
+    Nombre: body.nombre,
+    Centro: body.centro,
+    Dia: body.dia,
+    Hora: body.hora,
+    Tipo: body.tipo,
+    Estado: 'pendiente',
+    Notas: ''
+  };
+  appendRow_(sheet, nueva);
+  return nueva;
+}
+
+// Marca toda una sesión (todos sus asistentes) como cancelada de golpe (festivos, etc.).
+function cancelarSesion(body) {
+  const filas = getAsistenciaFecha(body.fecha, body.centro, body.dia, body.hora);
+  const sheet = getSheet_(SHEET_ASISTENCIA);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const idxId = headers.indexOf('ID');
+  const idxEstado = headers.indexOf('Estado');
+
+  const idsSesion = {};
+  filas.forEach(function (f) { idsSesion[String(f.ID)] = true; });
+
+  for (let i = 1; i < data.length; i++) {
+    if (idsSesion[String(data[i][idxId])]) {
+      sheet.getRange(i + 1, idxEstado + 1).setValue('cancelada');
+    }
+  }
+  return { canceladas: filas.length };
 }

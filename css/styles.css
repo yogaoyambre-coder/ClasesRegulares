@@ -9,6 +9,8 @@
   --border: #e4e1da;
   --ok-bg: #e7f2ea;
   --pend-bg: #fbeee7;
+  --cancel-bg: #ece9e2;
+  --noshow-bg: #f6dcd5;
   --radius: 14px;
 }
 
@@ -105,6 +107,14 @@ input[type="month"] {
   background: var(--pend-bg);
 }
 
+.alumno-card.cancelada {
+  background: var(--cancel-bg);
+}
+
+.alumno-card.no-show {
+  background: var(--noshow-bg);
+}
+
 .alumno-top {
   display: flex;
   justify-content: space-between;
@@ -164,6 +174,21 @@ input[type="month"] {
   background: var(--card);
   border: 1px solid var(--border);
   color: var(--text);
+}
+
+.btn-danger {
+  background: var(--danger);
+  color: #fff;
+}
+
+.select-estado {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  font-size: 0.95rem;
+  background: #fff;
+  color: var(--text);
+  width: 100%;
 }
 
 .btn-danger-link {

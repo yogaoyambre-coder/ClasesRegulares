@@ -5,7 +5,7 @@ App para gestión de clases, cobros y asistencia. Pensada para uso personal desd
 ## Estado actual
 
 - ✅ Módulo de **Cobros**
-- ⬜ Módulo de **Asistencia** (siguiente fase)
+- ✅ Módulo de **Asistencia**
 
 ## Estructura del repo
 
@@ -21,7 +21,7 @@ apps-script/Code.gs  → código del backend (Google Apps Script)
 
 ### 1. Crea el Google Sheet
 
-Crea una hoja de cálculo nueva en Google Sheets con dos pestañas:
+Crea una hoja de cálculo nueva en Google Sheets con tres pestañas:
 
 **Pestaña "Alumnos"** (fila 1 = cabeceras exactas):
 
@@ -33,7 +33,12 @@ Crea una hoja de cálculo nueva en Google Sheets con dos pestañas:
 | Mes | ID_Alumno | Nombre | Centro | Dia | Hora | Importe | Pagado | FechaPago | Notas |
 |-----|-----------|--------|--------|-----|------|---------|--------|-----------|-------|
 
-Rellena la pestaña "Alumnos" con tus alumnos actuales (Estado = `activo`, FechaAlta = fecha real o la de hoy). La pestaña "Pagos" puede quedar vacía: la app genera las filas de cada mes automáticamente.
+**Pestaña "Asistencia"** (fila 1 = cabeceras exactas):
+
+| ID | Fecha | ID_Alumno | Nombre | Centro | Dia | Hora | Tipo | Estado | Notas |
+|----|-------|-----------|--------|--------|-----|------|------|--------|-------|
+
+Rellena la pestaña "Alumnos" con tus alumnos actuales (Estado = `activo`, FechaAlta = fecha real o la de hoy). Las pestañas "Pagos" y "Asistencia" pueden quedar vacías: la app genera las filas automáticamente al abrir un mes/sesión.
 
 ### 2. Despliega el backend (Apps Script)
 
@@ -63,6 +68,16 @@ Sube `index.html`, `css/` y `js/` a tu hosting habitual (por ejemplo, embebido e
 
 ## Notas del modelo de datos
 
+### Cobros
+
 - Un alumno tiene un **precio por defecto**, pero el importe de cada mes es editable individualmente (por si aplica un descuento puntual).
 - Dar de baja a un alumno no borra su historial: solo deja de generar filas de pago en los meses futuros.
 - Al abrir un mes/clase por primera vez, la app crea automáticamente las filas de pago (pendientes) para todos los alumnos activos de esa clase.
+
+### Asistencia
+
+- Cada clase recurrente (Centro + Día + Hora) genera automáticamente una sesión por cada semana del mes (p.ej. "Lunes 17:30" da una sesión cada lunes).
+- Al abrir una sesión se comprueba la fecha de alta/baja de cada alumno **contra la fecha exacta de esa sesión** (no el mes completo). Por eso una baja hecha en Cobros deja de mostrar a esa persona en cualquier sesión futura sin tocar nada más.
+- Se puede añadir gente puntual a una sesión (recuperación, clase suelta, prueba) sin que afecte a la lista de Cobros.
+- "Sesión extra" sirve para clases movidas de día (festivos, etc.): abre una fecha cualquiera con la misma lista de alumnos del horario habitual, y esa fecha queda guardada para volver a encontrarla en el listado del mes.
+- "Cancelar toda la clase" marca a todos los apuntados de esa sesión como `cancelada` de golpe; se puede deshacer persona a persona después.
