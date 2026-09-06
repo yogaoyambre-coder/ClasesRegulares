@@ -29,8 +29,14 @@ function getSheet_(name) {
 
 // Google Sheets guarda "horas" y "fechas" como objetos Date internos aunque
 // se vean como texto. Los normalizamos aquí para no devolver ISO-UTC crudo.
+// OJO: "instanceof Date" no es fiable con valores de celda en Apps Script
+// (pueden venir de un "realm" distinto); se usa Object.prototype.toString.
+function esFecha_(value) {
+  return !!value && Object.prototype.toString.call(value) === '[object Date]';
+}
+
 function formatearValor_(header, value) {
-  if (!(value instanceof Date)) return value;
+  if (!esFecha_(value)) return value;
   const tz = Session.getScriptTimeZone();
   if (header === 'Hora') return Utilities.formatDate(value, tz, 'HH:mm');
   if (header === 'Mes') return Utilities.formatDate(value, tz, 'yyyy-MM');
@@ -64,7 +70,7 @@ function doGet(e) {
     let result;
     switch (action) {
       case 'ping':
-        result = { version: 'v2-formatearValor', ahora: new Date().toISOString() };
+        result = { version: 'v3-esFecha', ahora: new Date().toISOString() };
         break;
       case 'getAlumnos':
         result = getAlumnos();
