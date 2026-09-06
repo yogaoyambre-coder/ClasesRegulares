@@ -9,12 +9,13 @@ const ESTADOS_ASISTENCIA = [
 ];
 
 const state = {
-  modulo: 'cobros', // 'cobros' | 'asistencia'
+  modulo: 'cobros', // 'cobros' | 'asistencia' | 'clientes'
   mes: mesActual(),
   screen: 'centro', // 'centro' | 'horario' | 'alumnos' | 'sesiones' | 'sesion'
   centro: null,
   horario: null, // { dia, hora }
-  alumnos: [],
+  clientes: [],
+  alumnos: [], // inscripciones (centro+dia+hora+precio de un cliente)
   pagos: [],
   fechasGuardadas: [], // fechas de sesiones ya usadas para el horario/mes actual
   sesionFecha: null,
@@ -34,7 +35,7 @@ function hoyISO() {
 const app = document.getElementById('app');
 
 async function init() {
-  await cargarAlumnos();
+  await Promise.all([cargarAlumnos(), cargarClientes()]);
   render();
 }
 
@@ -42,11 +43,19 @@ async function cargarAlumnos() {
   state.cargando = true;
   render();
   try {
-    state.alumnos = await apiGet('getAlumnos');
+    state.alumnos = await apiGet('getInscripciones');
   } catch (err) {
-    mostrarToast('Error cargando alumnos: ' + err.message);
+    mostrarToast('Error cargando inscripciones: ' + err.message);
   }
   state.cargando = false;
+}
+
+async function cargarClientes() {
+  try {
+    state.clientes = await apiGet('getClientes');
+  } catch (err) {
+    mostrarToast('Error cargando clientes: ' + err.message);
+  }
 }
 
 async function cargarPagosMes() {
@@ -150,27 +159,33 @@ function fechasParaMostrar() {
   });
 }
 
+const TITULOS_MODULO = { cobros: 'Cobros', asistencia: 'Asistencia', clientes: 'Clientes' };
+
 function render() {
+  const mostrarMes = state.modulo !== 'clientes';
   app.innerHTML = '' +
-    '<header class="app-header"><h1>' + (state.modulo === 'cobros' ? 'Cobros' : 'Asistencia') + '</h1></header>' +
+    '<header class="app-header"><h1>' + TITULOS_MODULO[state.modulo] + '</h1></header>' +
     '<div class="pill-row">' +
       '<button class="pill ' + (state.modulo === 'cobros' ? 'active' : '') + '" data-accion="cambiar-modulo" data-modulo="cobros">Cobros</button>' +
       '<button class="pill ' + (state.modulo === 'asistencia' ? 'active' : '') + '" data-accion="cambiar-modulo" data-modulo="asistencia">Asistencia</button>' +
+      '<button class="pill ' + (state.modulo === 'clientes' ? 'active' : '') + '" data-accion="cambiar-modulo" data-modulo="clientes">Clientes</button>' +
     '</div>' +
-    '<input type="month" id="mes-input" value="' + state.mes + '">' +
+    (mostrarMes ? '<input type="month" id="mes-input" value="' + state.mes + '">' : '') +
     renderScreen();
 
-  document.getElementById('mes-input').addEventListener('change', async function (e) {
-    state.mes = e.target.value;
-    if (state.modulo === 'cobros' && state.screen === 'alumnos') {
-      await cargarPagosMes();
-    } else if (state.modulo === 'asistencia' && (state.screen === 'sesiones' || state.screen === 'sesion')) {
-      state.screen = 'sesiones';
-      await cargarFechasSesion();
-    } else {
-      render();
-    }
-  });
+  if (mostrarMes) {
+    document.getElementById('mes-input').addEventListener('change', async function (e) {
+      state.mes = e.target.value;
+      if (state.modulo === 'cobros' && state.screen === 'alumnos') {
+        await cargarPagosMes();
+      } else if (state.modulo === 'asistencia' && (state.screen === 'sesiones' || state.screen === 'sesion')) {
+        state.screen = 'sesiones';
+        await cargarFechasSesion();
+      } else {
+        render();
+      }
+    });
+  }
 
   bindScreenEvents();
 }
@@ -179,11 +194,33 @@ function renderScreen() {
   if (state.cargando && state.alumnos.length === 0) {
     return '<p class="empty-state">Cargando...</p>';
   }
+  if (state.modulo === 'clientes') return renderClientes();
   if (state.screen === 'centro') return renderCentros();
   if (state.screen === 'horario') return renderHorarios();
   if (state.modulo === 'cobros') return renderAlumnos();
   if (state.screen === 'sesiones') return renderSesiones();
   return renderSesion();
+}
+
+// --- Clientes ---
+
+function renderClientes() {
+  const clientes = state.clientes.slice().sort(function (a, b) { return a.Nombre.localeCompare(b.Nombre); });
+  return '' +
+    '<div class="section-title">Clientes (' + clientes.length + ')</div>' +
+    (clientes.length === 0
+      ? '<p class="empty-state">Todavía no hay clientes.</p>'
+      : clientes.map(renderClienteCard).join('')) +
+    '<button class="btn btn-primary btn-block" data-accion="abrir-nuevo-cliente">+ Nuevo cliente</button>';
+}
+
+function renderClienteCard(c) {
+  return '' +
+    '<div class="card">' +
+      '<div class="alumno-nombre">' + c.Nombre + (c.Apellidos ? ' ' + c.Apellidos : '') + '</div>' +
+      (c.Telefono ? '<div class="alumno-meta">' + c.Telefono + '</div>' : '') +
+      (c.Notas ? '<div class="alumno-meta">' + c.Notas + '</div>' : '') +
+    '</div>';
 }
 
 function renderCentros() {
@@ -411,6 +448,10 @@ function bindScreenEvents() {
       el.addEventListener('click', function () {
         abrirModalCancelarSesion();
       });
+    } else if (accion === 'abrir-nuevo-cliente') {
+      el.addEventListener('click', function () {
+        abrirModalNuevoCliente();
+      });
     }
   });
 }
@@ -477,7 +518,7 @@ function abrirModalBaja(id, nombre) {
   document.getElementById('cancelar-baja').addEventListener('click', function () { overlay.remove(); });
   document.getElementById('confirmar-baja-btn').addEventListener('click', async function () {
     try {
-      await apiPost('bajaAlumno', { id: id, fechaBaja: hoyISO() });
+      await apiPost('bajaInscripcion', { id: id, fechaBaja: hoyISO() });
       mostrarToast('Alumno/a dado de baja');
       overlay.remove();
       await cargarAlumnos();
@@ -488,15 +529,32 @@ function abrirModalBaja(id, nombre) {
   });
 }
 
-// --- Modal: alta de alumno ---
+// --- Modal: alta de inscripción (elige cliente existente o crea uno nuevo) ---
+
+const OPCION_CLIENTE_NUEVO = '__nuevo__';
 
 function abrirModalAlta(centroFijo, diaFijo, horaFijo) {
+  const clientesOrdenados = state.clientes.slice().sort(function (a, b) { return a.Nombre.localeCompare(b.Nombre); });
+  const opcionesCliente = clientesOrdenados.map(function (c) {
+    return '<option value="' + c.ID + '">' + c.Nombre + (c.Apellidos ? ' ' + c.Apellidos : '') + '</option>';
+  }).join('');
+
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = '' +
     '<div class="modal-sheet">' +
       '<h2>Nueva alta</h2>' +
-      '<div class="field"><label>Nombre</label><input type="text" id="alta-nombre"></div>' +
+      '<div class="field"><label>Cliente</label>' +
+        '<select id="alta-cliente">' +
+          '<option value="' + OPCION_CLIENTE_NUEVO + '">+ Cliente nuevo…</option>' +
+          opcionesCliente +
+        '</select>' +
+      '</div>' +
+      '<div id="alta-cliente-nuevo-campos" hidden>' +
+        '<div class="field"><label>Nombre</label><input type="text" id="alta-nombre"></div>' +
+        '<div class="field"><label>Apellidos</label><input type="text" id="alta-apellidos"></div>' +
+        '<div class="field"><label>Teléfono</label><input type="text" id="alta-telefono"></div>' +
+      '</div>' +
       '<div class="field"><label>Centro</label><input type="text" id="alta-centro" value="' + centroFijo + '"></div>' +
       '<div class="field"><label>Día (ej. Lunes)</label><input type="text" id="alta-dia" value="' + diaFijo + '"></div>' +
       '<div class="field"><label>Hora (ej. 18:00)</label><input type="text" id="alta-hora" value="' + horaFijo + '"></div>' +
@@ -508,27 +566,87 @@ function abrirModalAlta(centroFijo, diaFijo, horaFijo) {
     '</div>';
   document.body.appendChild(overlay);
 
+  const selectCliente = document.getElementById('alta-cliente');
+  const camposNuevo = document.getElementById('alta-cliente-nuevo-campos');
+  function actualizarVisibilidadNuevo() {
+    camposNuevo.hidden = selectCliente.value !== OPCION_CLIENTE_NUEVO;
+  }
+  actualizarVisibilidadNuevo();
+  selectCliente.addEventListener('change', actualizarVisibilidadNuevo);
+
   document.getElementById('cancelar-alta').addEventListener('click', function () { overlay.remove(); });
   document.getElementById('confirmar-alta-btn').addEventListener('click', async function () {
-    const nombre = document.getElementById('alta-nombre').value.trim();
     const centro = document.getElementById('alta-centro').value.trim();
     const dia = document.getElementById('alta-dia').value.trim();
     const hora = document.getElementById('alta-hora').value.trim();
     const precio = parseFloat(document.getElementById('alta-precio').value) || 0;
-    if (!nombre || !centro || !dia || !hora) {
-      mostrarToast('Rellena nombre, centro, día y hora');
+    if (!centro || !dia || !hora) {
+      mostrarToast('Rellena centro, día y hora');
       return;
     }
     try {
-      await apiPost('addAlumno', {
-        nombre: nombre, centro: centro, dia: dia, hora: hora,
+      let idCliente = selectCliente.value;
+      if (idCliente === OPCION_CLIENTE_NUEVO) {
+        const nombre = document.getElementById('alta-nombre').value.trim();
+        const apellidos = document.getElementById('alta-apellidos').value.trim();
+        const telefono = document.getElementById('alta-telefono').value.trim();
+        if (!nombre) {
+          mostrarToast('Escribe el nombre del cliente nuevo');
+          return;
+        }
+        const nuevoCliente = await apiPost('addCliente', { nombre: nombre, apellidos: apellidos, telefono: telefono });
+        idCliente = nuevoCliente.ID;
+      }
+      await apiPost('addInscripcion', {
+        idCliente: idCliente, centro: centro, dia: dia, hora: hora,
         precioDefecto: precio, fechaAlta: hoyISO()
       });
       mostrarToast('Alumno/a dado de alta');
       overlay.remove();
-      await cargarAlumnos();
+      await Promise.all([cargarAlumnos(), cargarClientes()]);
       if (state.screen === 'alumnos') await cargarPagosMes();
       else render();
+    } catch (err) {
+      mostrarToast('Error: ' + err.message);
+    }
+  });
+}
+
+// --- Modal: nuevo cliente (desde el módulo Clientes) ---
+
+function abrirModalNuevoCliente() {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = '' +
+    '<div class="modal-sheet">' +
+      '<h2>Nuevo cliente</h2>' +
+      '<div class="field"><label>Nombre</label><input type="text" id="cli-nombre"></div>' +
+      '<div class="field"><label>Apellidos</label><input type="text" id="cli-apellidos"></div>' +
+      '<div class="field"><label>Teléfono</label><input type="text" id="cli-telefono"></div>' +
+      '<div class="field"><label>Notas</label><input type="text" id="cli-notas"></div>' +
+      '<div class="modal-actions">' +
+        '<button class="btn btn-secondary" id="cancelar-cliente">Cancelar</button>' +
+        '<button class="btn btn-primary" id="confirmar-cliente-btn">Guardar</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+
+  document.getElementById('cancelar-cliente').addEventListener('click', function () { overlay.remove(); });
+  document.getElementById('confirmar-cliente-btn').addEventListener('click', async function () {
+    const nombre = document.getElementById('cli-nombre').value.trim();
+    const apellidos = document.getElementById('cli-apellidos').value.trim();
+    const telefono = document.getElementById('cli-telefono').value.trim();
+    const notas = document.getElementById('cli-notas').value.trim();
+    if (!nombre) {
+      mostrarToast('Escribe al menos el nombre');
+      return;
+    }
+    try {
+      await apiPost('addCliente', { nombre: nombre, apellidos: apellidos, telefono: telefono, notas: notas });
+      mostrarToast('Cliente creado');
+      overlay.remove();
+      await cargarClientes();
+      render();
     } catch (err) {
       mostrarToast('Error: ' + err.message);
     }

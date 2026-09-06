@@ -1,21 +1,34 @@
 /**
- * API de la app de Cobros y Asistencia — Google Apps Script
+ * API de la app de Cobros, Asistencia y Clientes — Google Apps Script
  *
  * Antes de desplegar:
  * 1. Sustituye SS_ID por el ID de tu Google Sheet (está en la URL de la hoja).
- * 2. La hoja debe tener tres pestañas con estas cabeceras exactas en la fila 1:
+ * 2. La hoja debe tener estas pestañas con estas cabeceras exactas en la fila 1:
  *
- *    "Alumnos":    ID | Nombre | Centro | Dia | Hora | PrecioDefecto | Estado | FechaAlta | FechaBaja
- *    "Pagos":      Mes | ID_Alumno | Nombre | Centro | Dia | Hora | Importe | Pagado | FechaPago | Notas
- *    "Asistencia": ID | Fecha | ID_Alumno | Nombre | Centro | Dia | Hora | Tipo | Estado | Notas
+ *    "Clientes":      ID | Nombre | Apellidos | Telefono | Notas
+ *    "Inscripciones": ID | ID_Cliente | Nombre | Centro | Dia | Hora | PrecioDefecto | Estado | FechaAlta | FechaBaja
+ *    "Pagos":         Mes | ID_Alumno | Nombre | Centro | Dia | Hora | Importe | Pagado | FechaPago | Notas
+ *    "Asistencia":    ID | Fecha | ID_Alumno | Nombre | Centro | Dia | Hora | Tipo | Estado | Notas
+ *
+ *    (Pagos y Asistencia siguen usando "ID_Alumno" como nombre de columna,
+ *    pero apunta al ID de la INSCRIPCIÓN — no hace falta migrar esas dos
+ *    pestañas, solo lo que antes era "Alumnos".)
  *
  * 3. Implementar > Nueva implementación > Aplicación web
  *    - Ejecutar como: Yo
  *    - Quién tiene acceso: Cualquier usuario
+ *
+ * Migración desde la versión anterior (una sola vez): si tu Sheet todavía
+ * tiene una pestaña "Alumnos" en vez de "Clientes"+"Inscripciones", llama a
+ * TU_URL/exec con POST {"action":"migrarAClientes"} una vez desplegado este
+ * código. Crea "Clientes" a partir de los nombres únicos de "Alumnos" y
+ * renombra "Alumnos" a "Inscripciones" añadiendo la columna ID_Cliente. Es
+ * segura de repetir: si no encuentra la hoja "Alumnos" no hace nada.
  */
 
 const SS_ID = '1BAXS6x2qk6GPI5-kmN3LPqtdPntm2g0ex8qQt0IALeY';
-const SHEET_ALUMNOS = 'Alumnos';
+const SHEET_CLIENTES = 'Clientes';
+const SHEET_INSCRIPCIONES = 'Inscripciones';
 const SHEET_PAGOS = 'Pagos';
 const SHEET_ASISTENCIA = 'Asistencia';
 
@@ -72,10 +85,13 @@ function doGet(e) {
     let result;
     switch (action) {
       case 'ping':
-        result = { version: 'v4-asistencia', ahora: new Date().toISOString() };
+        result = { version: 'v5-clientes', ahora: new Date().toISOString() };
         break;
-      case 'getAlumnos':
-        result = getAlumnos();
+      case 'getClientes':
+        result = getClientes();
+        break;
+      case 'getInscripciones':
+        result = getInscripciones();
         break;
       case 'getPagosMes':
         result = getPagosMes(e.parameter.mes);
@@ -100,11 +116,14 @@ function doPost(e) {
     const body = JSON.parse(e.postData.contents);
     let result;
     switch (body.action) {
-      case 'addAlumno':
-        result = addAlumno(body);
+      case 'addCliente':
+        result = addCliente(body);
         break;
-      case 'bajaAlumno':
-        result = bajaAlumno(body.id, body.fechaBaja);
+      case 'addInscripcion':
+        result = addInscripcion(body);
+        break;
+      case 'bajaInscripcion':
+        result = bajaInscripcion(body.id, body.fechaBaja);
         break;
       case 'setPago':
         result = setPago(body);
@@ -118,6 +137,9 @@ function doPost(e) {
       case 'cancelarSesion':
         result = cancelarSesion(body);
         break;
+      case 'migrarAClientes':
+        result = migrarAClientes();
+        break;
       default:
         throw new Error('Acción POST no reconocida: ' + body.action);
     }
@@ -127,25 +149,86 @@ function doPost(e) {
   }
 }
 
-function getAlumnos() {
-  return sheetToObjects_(getSheet_(SHEET_ALUMNOS));
+function getClientes() {
+  return sheetToObjects_(getSheet_(SHEET_CLIENTES));
+}
+
+function addCliente(body) {
+  const sheet = getSheet_(SHEET_CLIENTES);
+  const nuevo = {
+    ID: Utilities.getUuid(),
+    Nombre: body.nombre,
+    Apellidos: body.apellidos || '',
+    Telefono: body.telefono || '',
+    Notas: body.notas || ''
+  };
+  appendRow_(sheet, nuevo);
+  return nuevo;
+}
+
+function getInscripciones() {
+  return sheetToObjects_(getSheet_(SHEET_INSCRIPCIONES));
+}
+
+function nombreCompletoCliente_(cliente) {
+  return cliente.Apellidos ? cliente.Nombre + ' ' + cliente.Apellidos : cliente.Nombre;
+}
+
+function addInscripcion(body) {
+  const clientes = getClientes();
+  const cliente = clientes.find(function (c) { return String(c.ID) === String(body.idCliente); });
+  if (!cliente) throw new Error('Cliente no encontrado');
+
+  const sheet = getSheet_(SHEET_INSCRIPCIONES);
+  const nueva = {
+    ID: Utilities.getUuid(),
+    ID_Cliente: cliente.ID,
+    Nombre: nombreCompletoCliente_(cliente),
+    Centro: body.centro,
+    Dia: body.dia,
+    Hora: body.hora,
+    PrecioDefecto: body.precioDefecto,
+    Estado: 'activo',
+    FechaAlta: body.fechaAlta || new Date(),
+    FechaBaja: ''
+  };
+  appendRow_(sheet, nueva);
+  return nueva;
+}
+
+function bajaInscripcion(id, fechaBaja) {
+  const sheet = getSheet_(SHEET_INSCRIPCIONES);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const idxId = headers.indexOf('ID');
+  const idxEstado = headers.indexOf('Estado');
+  const idxBaja = headers.indexOf('FechaBaja');
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idxId]) === String(id)) {
+      sheet.getRange(i + 1, idxEstado + 1).setValue('baja');
+      sheet.getRange(i + 1, idxBaja + 1).setValue(fechaBaja || new Date());
+      return { updated: true };
+    }
+  }
+  throw new Error('Inscripción no encontrada');
 }
 
 /**
- * Devuelve los pagos de un mes (YYYY-MM). Si un alumno activo en ese mes
- * todavía no tiene fila de pago, la crea automáticamente con su precio
+ * Devuelve los pagos de un mes (YYYY-MM). Si una inscripción activa en ese
+ * mes todavía no tiene fila de pago, la crea automáticamente con su precio
  * por defecto y Pagado=false.
  */
 function getPagosMes(mes) {
   const sheetPagos = getSheet_(SHEET_PAGOS);
   const pagos = sheetToObjects_(sheetPagos).filter(function (p) { return p.Mes === mes; });
 
-  const alumnos = getAlumnos();
+  const inscripciones = getInscripciones();
   const partes = mes.split('-').map(Number);
   const primerDiaMes = new Date(partes[0], partes[1] - 1, 1);
   const ultimoDiaMes = new Date(partes[0], partes[1], 0);
 
-  const activosEnMes = alumnos.filter(function (a) {
+  const activasEnMes = inscripciones.filter(function (a) {
     const alta = a.FechaAlta ? new Date(a.FechaAlta) : null;
     const baja = a.FechaBaja ? new Date(a.FechaBaja) : null;
     if (alta && alta > ultimoDiaMes) return false;
@@ -156,8 +239,8 @@ function getPagosMes(mes) {
   const idsConPago = {};
   pagos.forEach(function (p) { idsConPago[p.ID_Alumno] = true; });
 
-  const nuevos = activosEnMes.filter(function (a) { return !idsConPago[a.ID]; });
-  nuevos.forEach(function (a) {
+  const nuevas = activasEnMes.filter(function (a) { return !idsConPago[a.ID]; });
+  nuevas.forEach(function (a) {
     const nuevoPago = {
       Mes: mes,
       ID_Alumno: a.ID,
@@ -197,50 +280,15 @@ function setPago(body) {
       return { updated: true };
     }
   }
-  throw new Error('No se encontró el pago de ese alumno para ese mes');
-}
-
-function addAlumno(body) {
-  const sheet = getSheet_(SHEET_ALUMNOS);
-  const nuevo = {
-    ID: Utilities.getUuid(),
-    Nombre: body.nombre,
-    Centro: body.centro,
-    Dia: body.dia,
-    Hora: body.hora,
-    PrecioDefecto: body.precioDefecto,
-    Estado: 'activo',
-    FechaAlta: body.fechaAlta || new Date(),
-    FechaBaja: ''
-  };
-  appendRow_(sheet, nuevo);
-  return nuevo;
-}
-
-function bajaAlumno(id, fechaBaja) {
-  const sheet = getSheet_(SHEET_ALUMNOS);
-  const data = sheet.getDataRange().getValues();
-  const headers = data[0];
-  const idxId = headers.indexOf('ID');
-  const idxEstado = headers.indexOf('Estado');
-  const idxBaja = headers.indexOf('FechaBaja');
-
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][idxId]) === String(id)) {
-      sheet.getRange(i + 1, idxEstado + 1).setValue('baja');
-      sheet.getRange(i + 1, idxBaja + 1).setValue(fechaBaja || new Date());
-      return { updated: true };
-    }
-  }
-  throw new Error('Alumno no encontrado');
+  throw new Error('No se encontró el pago de esa inscripción para ese mes');
 }
 
 /**
  * Devuelve la asistencia de una sesión concreta (Fecha+Centro+Dia+Hora).
  * Genera automáticamente las filas "regular" que falten, comprobando la
- * fecha de alta/baja de cada alumno contra la fecha exacta de la sesión
- * (no el mes completo, a diferencia de Pagos). Esto es lo que hace que
- * una baja en Cobros se refleje sola en cualquier sesión futura: si ya
+ * fecha de alta/baja de cada inscripción contra la fecha exacta de la
+ * sesión (no el mes completo, a diferencia de Pagos). Esto es lo que hace
+ * que una baja en Cobros se refleje sola en cualquier sesión futura: si ya
  * existía una fila "regular" pendiente para alguien que después causó
  * baja, se descarta aquí en vez de mostrarla.
  */
@@ -251,7 +299,7 @@ function getAsistenciaFecha(fecha, centro, dia, hora) {
   });
 
   const fechaSesion = new Date(fecha);
-  const activos = getAlumnos().filter(function (a) {
+  const activas = getInscripciones().filter(function (a) {
     if (a.Centro !== centro || a.Dia !== dia || a.Hora !== hora) return false;
     const alta = a.FechaAlta ? new Date(a.FechaAlta) : null;
     const baja = a.FechaBaja ? new Date(a.FechaBaja) : null;
@@ -260,17 +308,17 @@ function getAsistenciaFecha(fecha, centro, dia, hora) {
     return true;
   });
 
-  const idsActivos = {};
-  activos.forEach(function (a) { idsActivos[a.ID] = true; });
-  // Descarta filas "regular" de alumnos que ya no estén activos en esta fecha
-  // (por ejemplo, una baja registrada después de haber abierto esta sesión).
-  filas = filas.filter(function (f) { return f.Tipo !== 'regular' || idsActivos[String(f.ID_Alumno)]; });
+  const idsActivas = {};
+  activas.forEach(function (a) { idsActivas[a.ID] = true; });
+  // Descarta filas "regular" de inscripciones que ya no estén activas en esta
+  // fecha (por ejemplo, una baja registrada después de haber abierto la sesión).
+  filas = filas.filter(function (f) { return f.Tipo !== 'regular' || idsActivas[String(f.ID_Alumno)]; });
 
   const idsConFila = {};
   filas.forEach(function (f) { if (f.Tipo === 'regular') idsConFila[String(f.ID_Alumno)] = true; });
 
-  const nuevos = activos.filter(function (a) { return !idsConFila[String(a.ID)]; });
-  nuevos.forEach(function (a) {
+  const nuevas = activas.filter(function (a) { return !idsConFila[String(a.ID)]; });
+  nuevas.forEach(function (a) {
     const nueva = {
       ID: Utilities.getUuid(),
       Fecha: fecha,
@@ -359,4 +407,48 @@ function cancelarSesion(body) {
     }
   }
   return { canceladas: filas.length };
+}
+
+/**
+ * Migración única desde el modelo antiguo (una sola pestaña "Alumnos") al
+ * nuevo modelo Clientes + Inscripciones. Idempotente: si no existe una hoja
+ * "Alumnos" no hace nada (ya migrado, o instalación nueva).
+ */
+function migrarAClientes() {
+  const ss = getSS_();
+  const hojaAlumnos = ss.getSheetByName('Alumnos');
+  if (!hojaAlumnos) {
+    return { migrado: false, motivo: 'No existe una hoja "Alumnos" que migrar' };
+  }
+
+  let hojaClientes = ss.getSheetByName(SHEET_CLIENTES);
+  if (!hojaClientes) {
+    hojaClientes = ss.insertSheet(SHEET_CLIENTES);
+    hojaClientes.appendRow(['ID', 'Nombre', 'Apellidos', 'Telefono', 'Notas']);
+  }
+
+  const filasAlumnos = sheetToObjects_(hojaAlumnos);
+  const idClientePorNombre = {};
+  const filasInscripciones = [];
+
+  filasAlumnos.forEach(function (a) {
+    let idCliente = idClientePorNombre[a.Nombre];
+    if (!idCliente) {
+      idCliente = Utilities.getUuid();
+      idClientePorNombre[a.Nombre] = idCliente;
+      hojaClientes.appendRow([idCliente, a.Nombre, '', '', '']);
+    }
+    filasInscripciones.push([a.ID, idCliente, a.Nombre, a.Centro, a.Dia, a.Hora, a.PrecioDefecto, a.Estado, a.FechaAlta, a.FechaBaja]);
+  });
+
+  hojaAlumnos.clearContents();
+  hojaAlumnos.appendRow(['ID', 'ID_Cliente', 'Nombre', 'Centro', 'Dia', 'Hora', 'PrecioDefecto', 'Estado', 'FechaAlta', 'FechaBaja']);
+  filasInscripciones.forEach(function (fila) { hojaAlumnos.appendRow(fila); });
+  hojaAlumnos.setName(SHEET_INSCRIPCIONES);
+
+  return {
+    migrado: true,
+    clientesCreados: Object.keys(idClientePorNombre).length,
+    inscripcionesMigradas: filasInscripciones.length
+  };
 }

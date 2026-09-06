@@ -4,6 +4,7 @@ App para gestión de clases, cobros y asistencia. Pensada para uso personal desd
 
 ## Estado actual
 
+- ✅ Módulo de **Clientes**
 - ✅ Módulo de **Cobros**
 - ✅ Módulo de **Asistencia**
 
@@ -21,12 +22,17 @@ apps-script/Code.gs  → código del backend (Google Apps Script)
 
 ### 1. Crea el Google Sheet
 
-Crea una hoja de cálculo nueva en Google Sheets con tres pestañas:
+Crea una hoja de cálculo nueva en Google Sheets con cuatro pestañas:
 
-**Pestaña "Alumnos"** (fila 1 = cabeceras exactas):
+**Pestaña "Clientes"** (fila 1 = cabeceras exactas):
 
-| ID | Nombre | Centro | Dia | Hora | PrecioDefecto | Estado | FechaAlta | FechaBaja |
-|----|--------|--------|-----|------|---------------|--------|-----------|-----------|
+| ID | Nombre | Apellidos | Telefono | Notas |
+|----|--------|-----------|----------|-------|
+
+**Pestaña "Inscripciones"** (fila 1 = cabeceras exactas) — un cliente inscrito en una clase concreta:
+
+| ID | ID_Cliente | Nombre | Centro | Dia | Hora | PrecioDefecto | Estado | FechaAlta | FechaBaja |
+|----|-----------|--------|--------|-----|------|---------------|--------|-----------|-----------|
 
 **Pestaña "Pagos"** (fila 1 = cabeceras exactas):
 
@@ -38,7 +44,13 @@ Crea una hoja de cálculo nueva en Google Sheets con tres pestañas:
 | ID | Fecha | ID_Alumno | Nombre | Centro | Dia | Hora | Tipo | Estado | Notas |
 |----|-------|-----------|--------|--------|-----|------|------|--------|-------|
 
-Rellena la pestaña "Alumnos" con tus alumnos actuales (Estado = `activo`, FechaAlta = fecha real o la de hoy). Las pestañas "Pagos" y "Asistencia" pueden quedar vacías: la app genera las filas automáticamente al abrir un mes/sesión.
+> `ID_Alumno` en Pagos y Asistencia apunta al `ID` de **Inscripciones**, no al de Clientes — el nombre de columna se mantuvo por compatibilidad con datos ya existentes.
+
+Todo se puede rellenar desde la propia app (Clientes → Cobros → Asistencia). Si ya tenías datos de una versión anterior con una sola pestaña "Alumnos", ver la sección de migración abajo.
+
+#### Migración desde una pestaña "Alumnos" única
+
+Si tu Sheet viene de antes de que existiera el módulo de Clientes, no hace falta migrar nada a mano: en cuanto despliegues el `Code.gs` actualizado, haz una petición POST a `TU_URL/exec` con `{"action":"migrarAClientes"}`. Crea "Clientes" a partir de los nombres únicos que había en "Alumnos" y renombra "Alumnos" a "Inscripciones" añadiendo la columna `ID_Cliente`. Es segura de ejecutar más de una vez: si no encuentra la hoja "Alumnos" no hace nada.
 
 ### 2. Despliega el backend (Apps Script)
 
@@ -67,6 +79,12 @@ por la URL copiada en el paso anterior.
 Sube `index.html`, `css/` y `js/` a tu hosting habitual (por ejemplo, embebido en WordPress como en la app anterior), o ábrelo directamente desde un hosting estático. Al ser una SPA sin build, no requiere ningún paso de compilación.
 
 ## Notas del modelo de datos
+
+### Clientes
+
+- Un **cliente** es la persona (nombre, apellidos, teléfono, notas). Una **inscripción** es su presencia en una clase concreta (centro+día+hora+precio).
+- Un mismo cliente puede tener varias inscripciones (estar en más de un grupo) sin repetir sus datos de contacto.
+- El nombre que se guarda en Pagos/Asistencia es una copia del nombre del cliente en el momento de la inscripción — si luego cambias el nombre en Clientes, las inscripciones ya creadas no se actualizan solas.
 
 ### Cobros
 
