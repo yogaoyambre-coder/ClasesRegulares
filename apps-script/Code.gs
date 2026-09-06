@@ -68,10 +68,28 @@ function sheetToObjects_(sheet) {
   });
 }
 
+// Columnas que deben guardarse siempre como texto plano. Un valor que empieza
+// por "+" (típico de un teléfono internacional) Google Sheets lo interpreta
+// como el inicio de una fórmula si se escribe con setValue/appendRow tal cual
+// — con espacios dentro, la "fórmula" ni siquiera es válida y da #ERROR!,
+// perdiendo el dato. Forzar el formato de celda a texto ("@") antes de
+// escribir evita el problema.
+const COLUMNAS_TEXTO_FORZADO = ['Telefono'];
+
 function appendRow_(sheet, obj) {
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   const row = headers.map(function (h) { return obj[h] !== undefined ? obj[h] : ''; });
   sheet.appendRow(row);
+  const fila = sheet.getLastRow();
+  headers.forEach(function (h, i) {
+    if (COLUMNAS_TEXTO_FORZADO.indexOf(h) !== -1 && obj[h]) {
+      sheet.getRange(fila, i + 1).setNumberFormat('@').setValue(String(obj[h]));
+    }
+  });
+}
+
+function setValueTexto_(sheet, fila, columna, valor) {
+  sheet.getRange(fila, columna).setNumberFormat('@').setValue(valor);
 }
 
 function jsonResponse_(obj) {
@@ -85,7 +103,7 @@ function doGet(e) {
     let result;
     switch (action) {
       case 'ping':
-        result = { version: 'v6-editar-cliente', ahora: new Date().toISOString() };
+        result = { version: 'v7-fix-telefono-nombre', ahora: new Date().toISOString() };
         break;
       case 'getClientes':
         result = getClientes();
@@ -124,6 +142,9 @@ function doPost(e) {
         break;
       case 'addInscripcion':
         result = addInscripcion(body);
+        break;
+      case 'actualizarInscripcion':
+        result = actualizarInscripcion(body);
         break;
       case 'bajaInscripcion':
         result = bajaInscripcion(body.id, body.fechaBaja);
@@ -186,7 +207,7 @@ function actualizarCliente(body) {
     if (String(data[i][idxId]) === String(body.id)) {
       if (body.nombre !== undefined) sheet.getRange(i + 1, idxNombre + 1).setValue(body.nombre);
       if (body.apellidos !== undefined) sheet.getRange(i + 1, idxApellidos + 1).setValue(body.apellidos);
-      if (body.telefono !== undefined) sheet.getRange(i + 1, idxTelefono + 1).setValue(body.telefono);
+      if (body.telefono !== undefined) setValueTexto_(sheet, i + 1, idxTelefono + 1, body.telefono);
       if (body.notas !== undefined) sheet.getRange(i + 1, idxNotas + 1).setValue(body.notas);
       return { updated: true };
     }
@@ -198,10 +219,6 @@ function getInscripciones() {
   return sheetToObjects_(getSheet_(SHEET_INSCRIPCIONES));
 }
 
-function nombreCompletoCliente_(cliente) {
-  return cliente.Apellidos ? cliente.Nombre + ' ' + cliente.Apellidos : cliente.Nombre;
-}
-
 function addInscripcion(body) {
   const clientes = getClientes();
   const cliente = clientes.find(function (c) { return String(c.ID) === String(body.idCliente); });
@@ -211,7 +228,11 @@ function addInscripcion(body) {
   const nueva = {
     ID: Utilities.getUuid(),
     ID_Cliente: cliente.ID,
-    Nombre: nombreCompletoCliente_(cliente),
+    // Solo el nombre, sin apellidos: en Cobros/Asistencia sobra (ya se ve
+    // el centro/día/hora en la propia inscripción), y si los apellidos se
+    // usan como indicativo de horario en vez de apellido real, concatenar
+    // queda confuso ("Jose Angel SV L 18:30").
+    Nombre: cliente.Nombre,
     Centro: body.centro,
     Dia: body.dia,
     Hora: body.hora,
@@ -222,6 +243,28 @@ function addInscripcion(body) {
   };
   appendRow_(sheet, nueva);
   return nueva;
+}
+
+// Correccion puntual de una inscripcion ya creada (nombre, precio, horario...).
+function actualizarInscripcion(body) {
+  const sheet = getSheet_(SHEET_INSCRIPCIONES);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const idxId = headers.indexOf('ID');
+  const campos = ['Nombre', 'Centro', 'Dia', 'Hora', 'PrecioDefecto'];
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idxId]) === String(body.id)) {
+      campos.forEach(function (campo) {
+        const clave = campo.charAt(0).toLowerCase() + campo.slice(1);
+        if (body[clave] !== undefined) {
+          sheet.getRange(i + 1, headers.indexOf(campo) + 1).setValue(body[clave]);
+        }
+      });
+      return { updated: true };
+    }
+  }
+  throw new Error('Inscripción no encontrada');
 }
 
 function bajaInscripcion(id, fechaBaja) {
