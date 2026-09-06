@@ -200,11 +200,11 @@ function bindScreenEvents() {
       });
     } else if (accion === 'toggle-pagado') {
       el.addEventListener('change', async function () {
-        await actualizarPago(el.dataset.id, { pagado: el.checked, fechaPago: el.checked ? hoyISO() : '' });
+        await actualizarPago(el.dataset.id, { Pagado: el.checked, FechaPago: el.checked ? hoyISO() : '' });
       });
     } else if (accion === 'cambiar-importe') {
       el.addEventListener('change', async function () {
-        await actualizarPago(el.dataset.id, { importe: parseFloat(el.value) || 0 });
+        await actualizarPago(el.dataset.id, { Importe: parseFloat(el.value) || 0 });
       });
     } else if (accion === 'confirmar-baja') {
       el.addEventListener('click', function () {
