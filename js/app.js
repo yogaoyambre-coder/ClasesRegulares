@@ -22,7 +22,8 @@ const state = {
   asistencias: [],
   cargando: false,
   filtroCentro: '', // filtro del módulo Clientes
-  filtroHorario: null // { dia, hora } | null
+  filtroHorario: null, // { dia, hora } | null
+  mostrarBajas: false
 };
 
 function mesActual() {
@@ -207,6 +208,10 @@ function render() {
         render();
       });
     }
+    document.getElementById('filtro-mostrar-bajas').addEventListener('change', function (e) {
+      state.mostrarBajas = e.target.checked;
+      render();
+    });
   }
 
   bindScreenEvents();
@@ -254,7 +259,15 @@ function avisoTelefonoDuplicado(telefono, excluirId) {
   return confirm('Ya existe un cliente con este teléfono: ' + nombreExistente + '.\n\n¿Crear de todas formas? (puede ser normal si comparten teléfono, ej. familiares)');
 }
 
+// Solo "de baja del todo": tiene inscripciones, pero ninguna activa. Un
+// cliente sin ninguna inscripción todavía (recién creado) no cuenta como baja.
+function clienteDeBajaDelTodo(cliente) {
+  const inscs = inscripcionesDeCliente(cliente.ID);
+  return inscs.length > 0 && !inscs.some(function (i) { return i.Estado === 'activo'; });
+}
+
 function clienteCoincideFiltro(cliente) {
+  if (!state.mostrarBajas && clienteDeBajaDelTodo(cliente)) return false;
   if (!state.filtroCentro && !state.filtroHorario) return true;
   return inscripcionesDeCliente(cliente.ID).some(function (i) {
     if (state.filtroCentro && i.Centro !== state.filtroCentro) return false;
@@ -288,6 +301,9 @@ function renderClientes() {
           '</select>'
         : '') +
     '</div>' +
+    '<label class="alumno-meta" style="display:flex;align-items:center;gap:6px;">' +
+      '<input type="checkbox" id="filtro-mostrar-bajas" ' + (state.mostrarBajas ? 'checked' : '') + '> Mostrar también las bajas' +
+    '</label>' +
     '<div class="section-title">Clientes (' + clientes.length + ')</div>' +
     (clientes.length === 0
       ? '<p class="empty-state">No hay clientes con ese filtro.</p>'
