@@ -103,7 +103,7 @@ function doGet(e) {
     let result;
     switch (action) {
       case 'ping':
-        result = { version: 'v7-fix-telefono-nombre', ahora: new Date().toISOString() };
+        result = { version: 'v8-eliminar-asistencia', ahora: new Date().toISOString() };
         break;
       case 'getClientes':
         result = getClientes();
@@ -160,6 +160,9 @@ function doPost(e) {
         break;
       case 'addAsistente':
         result = addAsistente(body);
+        break;
+      case 'eliminarAsistencia':
+        result = eliminarAsistencia(body.id);
         break;
       case 'cancelarSesion':
         result = cancelarSesion(body);
@@ -476,6 +479,23 @@ function addAsistente(body) {
   };
   appendRow_(sheet, nueva);
   return nueva;
+}
+
+// Borra por completo un registro de asistencia (para quitar pruebas o
+// duplicados; a diferencia de cambiar el Estado, esto no deja rastro).
+function eliminarAsistencia(id) {
+  const sheet = getSheet_(SHEET_ASISTENCIA);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const idxId = headers.indexOf('ID');
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idxId]) === String(id)) {
+      sheet.deleteRow(i + 1);
+      return { deleted: true };
+    }
+  }
+  throw new Error('No se encontró ese registro de asistencia');
 }
 
 // Marca toda una sesión (todos sus asistentes) como cancelada de golpe (festivos, etc.).

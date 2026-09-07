@@ -230,6 +230,24 @@ function inscripcionesDeCliente(idCliente) {
   return state.alumnos.filter(function (a) { return String(a.ID_Cliente) === String(idCliente); });
 }
 
+// Compara solo dígitos para no fallar por espacios/guiones/"+34" escritos distinto.
+function buscarClientePorTelefono(telefono, excluirId) {
+  const limpio = String(telefono).replace(/\D/g, '');
+  if (!limpio) return null;
+  return state.clientes.find(function (c) {
+    if (excluirId && String(c.ID) === String(excluirId)) return false;
+    return c.Telefono && String(c.Telefono).replace(/\D/g, '') === limpio;
+  });
+}
+
+function avisoTelefonoDuplicado(telefono, excluirId) {
+  if (!telefono) return true;
+  const existente = buscarClientePorTelefono(telefono, excluirId);
+  if (!existente) return true;
+  const nombreExistente = existente.Nombre + (existente.Apellidos ? ' ' + existente.Apellidos : '');
+  return confirm('Ya existe un cliente con este teléfono: ' + nombreExistente + '.\n\n¿Crear de todas formas? (puede ser normal si comparten teléfono, ej. familiares)');
+}
+
 function clienteCoincideFiltro(cliente) {
   if (!state.filtroCentro && !state.filtroHorario) return true;
   return inscripcionesDeCliente(cliente.ID).some(function (i) {
@@ -272,14 +290,21 @@ function renderClientes() {
 }
 
 function renderClienteCard(c) {
+  const activas = inscripcionesDeCliente(c.ID).filter(function (i) { return i.Estado === 'activo'; });
+  const sinInscripcionesActivas = activas.length === 0 && inscripcionesDeCliente(c.ID).length > 0;
   return '' +
     '<div class="card">' +
       '<div class="alumno-top">' +
-        '<span class="alumno-nombre">' + c.Nombre + (c.Apellidos ? ' ' + c.Apellidos : '') + '</span>' +
+        '<span class="alumno-nombre">' + c.Nombre + (c.Apellidos ? ' ' + c.Apellidos : '') +
+          (sinInscripcionesActivas ? ' <span class="alumno-meta">(de baja)</span>' : '') +
+        '</span>' +
         '<button class="back-link" data-accion="editar-cliente" data-id="' + c.ID + '">Editar</button>' +
       '</div>' +
       (c.Telefono ? '<div class="alumno-meta">' + c.Telefono + '</div>' : '') +
       (c.Notas ? '<div class="alumno-meta">' + c.Notas + '</div>' : '') +
+      (activas.length > 0
+        ? '<button class="btn-danger-link" data-accion="abrir-baja-cliente" data-id="' + c.ID + '">Dar de baja</button>'
+        : '') +
     '</div>';
 }
 
@@ -328,13 +353,19 @@ function esPagado(p) {
   return p.Pagado === true || p.Pagado === 'TRUE' || p.Pagado === 'true';
 }
 
+function inscripcionPorId(id) {
+  return state.alumnos.find(function (a) { return String(a.ID) === String(id); });
+}
+
 function renderAlumnoCard(p) {
   const pagado = esPagado(p);
+  const inscripcion = inscripcionPorId(p.ID_Alumno);
+  const esBaja = inscripcion && inscripcion.Estado === 'baja';
   return '' +
     '<div class="card alumno-card ' + (pagado ? 'pagado' : 'pendiente') + '">' +
       '<div class="alumno-top">' +
-        '<span class="alumno-nombre">' + p.Nombre + '</span>' +
-        '<button class="btn-danger-link" data-accion="confirmar-baja" data-id="' + p.ID_Alumno + '" data-nombre="' + p.Nombre + '">Dar de baja</button>' +
+        '<span class="alumno-nombre">' + p.Nombre + (esBaja ? ' <span class="alumno-meta">(de baja)</span>' : '') + '</span>' +
+        (esBaja ? '' : '<button class="btn-danger-link" data-accion="confirmar-baja" data-id="' + p.ID_Alumno + '" data-nombre="' + p.Nombre + '">Dar de baja</button>') +
       '</div>' +
       '<div class="alumno-controls">' +
         '<input type="checkbox" class="checkbox-pagado" data-accion="toggle-pagado" data-id="' + p.ID_Alumno + '" ' + (pagado ? 'checked' : '') + '>' +
@@ -397,7 +428,10 @@ function renderAsistenteCard(f) {
   const tipoTag = f.Tipo !== 'regular' ? ' <span class="alumno-meta">(' + f.Tipo + ')</span>' : '';
   return '' +
     '<div class="card alumno-card ' + claseEstado(f.Estado) + '">' +
-      '<div class="alumno-top"><span class="alumno-nombre">' + f.Nombre + tipoTag + '</span></div>' +
+      '<div class="alumno-top">' +
+        '<span class="alumno-nombre">' + f.Nombre + tipoTag + '</span>' +
+        '<button class="btn-danger-link" data-accion="eliminar-asistencia" data-id="' + f.ID + '" data-nombre="' + f.Nombre + '">Eliminar</button>' +
+      '</div>' +
       '<div class="alumno-controls">' +
         '<select class="select-estado" data-accion="cambiar-estado" data-id="' + f.ID + '">' + opciones + '</select>' +
       '</div>' +
@@ -508,6 +542,10 @@ function bindScreenEvents() {
       el.addEventListener('click', function () {
         abrirModalCancelarSesion();
       });
+    } else if (accion === 'eliminar-asistencia') {
+      el.addEventListener('click', function () {
+        abrirModalEliminarAsistencia(el.dataset.id, el.dataset.nombre);
+      });
     } else if (accion === 'abrir-nuevo-cliente') {
       el.addEventListener('click', function () {
         abrirModalNuevoCliente();
@@ -515,6 +553,10 @@ function bindScreenEvents() {
     } else if (accion === 'editar-cliente') {
       el.addEventListener('click', function () {
         abrirModalEditarCliente(el.dataset.id);
+      });
+    } else if (accion === 'abrir-baja-cliente') {
+      el.addEventListener('click', function () {
+        abrirModalBajaCliente(el.dataset.id);
       });
     }
   });
@@ -658,6 +700,7 @@ function abrirModalAlta(centroFijo, diaFijo, horaFijo) {
           mostrarToast('Escribe el nombre del cliente nuevo');
           return;
         }
+        if (!avisoTelefonoDuplicado(telefono)) return;
         const nuevoCliente = await apiPost('addCliente', { nombre: nombre, apellidos: apellidos, telefono: telefono });
         idCliente = nuevoCliente.ID;
       }
@@ -705,6 +748,7 @@ function abrirModalNuevoCliente() {
       mostrarToast('Escribe al menos el nombre');
       return;
     }
+    if (!avisoTelefonoDuplicado(telefono)) return;
     try {
       await apiPost('addCliente', { nombre: nombre, apellidos: apellidos, telefono: telefono, notas: notas });
       mostrarToast('Cliente creado');
@@ -759,6 +803,52 @@ function abrirModalEditarCliente(id) {
     } catch (err) {
       mostrarToast('Error: ' + err.message);
     }
+  });
+}
+
+// --- Modal: dar de baja a un cliente (puede tener varios grupos) ---
+
+function abrirModalBajaCliente(idCliente) {
+  const cliente = state.clientes.find(function (c) { return String(c.ID) === String(idCliente); });
+  if (!cliente) return;
+  const activas = inscripcionesDeCliente(idCliente).filter(function (i) { return i.Estado === 'activo'; });
+  if (activas.length === 0) {
+    mostrarToast('No tiene inscripciones activas');
+    return;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = '' +
+    '<div class="modal-sheet">' +
+      '<h2>Dar de baja a ' + cliente.Nombre + '</h2>' +
+      '<p>Elige qué grupo(s) dar de baja. Se conserva su ficha de cliente por si vuelve más adelante.</p>' +
+      activas.map(function (i) {
+        return '' +
+          '<div class="card alumno-card pendiente">' +
+            '<div class="alumno-top"><span class="alumno-nombre">' + i.Centro + ' — ' + i.Dia + ' ' + i.Hora + '</span></div>' +
+            '<button class="btn btn-danger btn-block" data-baja-insc="' + i.ID + '">Dar de baja este grupo</button>' +
+          '</div>';
+      }).join('') +
+      '<div class="modal-actions">' +
+        '<button class="btn btn-secondary" id="cerrar-baja-cliente">Cerrar</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+
+  document.getElementById('cerrar-baja-cliente').addEventListener('click', function () { overlay.remove(); });
+  overlay.querySelectorAll('[data-baja-insc]').forEach(function (btn) {
+    btn.addEventListener('click', async function () {
+      try {
+        await apiPost('bajaInscripcion', { id: btn.dataset.bajaInsc, fechaBaja: hoyISO() });
+        mostrarToast('Dado de baja');
+        overlay.remove();
+        await cargarAlumnos();
+        render();
+      } catch (err) {
+        mostrarToast('Error: ' + err.message);
+      }
+    });
   });
 }
 
@@ -863,6 +953,35 @@ function abrirModalCancelarSesion() {
         fecha: state.sesionFecha, centro: state.centro, dia: state.horario.dia, hora: state.horario.hora
       });
       mostrarToast('Clase cancelada');
+      overlay.remove();
+      await cargarAsistenciaFecha(state.sesionFecha);
+    } catch (err) {
+      mostrarToast('Error: ' + err.message);
+    }
+  });
+}
+
+// --- Modal: eliminar un registro de asistencia ---
+
+function abrirModalEliminarAsistencia(id, nombre) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = '' +
+    '<div class="modal-sheet">' +
+      '<h2>Eliminar registro</h2>' +
+      '<p>Se borrará por completo el registro de asistencia de "' + nombre + '" en esta sesión. No se puede deshacer.</p>' +
+      '<div class="modal-actions">' +
+        '<button class="btn btn-secondary" id="cancelar-eliminar-asis">Cancelar</button>' +
+        '<button class="btn btn-danger" id="confirmar-eliminar-asis-btn">Eliminar</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+
+  document.getElementById('cancelar-eliminar-asis').addEventListener('click', function () { overlay.remove(); });
+  document.getElementById('confirmar-eliminar-asis-btn').addEventListener('click', async function () {
+    try {
+      await apiPost('eliminarAsistencia', { id: id });
+      mostrarToast('Registro eliminado');
       overlay.remove();
       await cargarAsistenciaFecha(state.sesionFecha);
     } catch (err) {
