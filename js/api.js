@@ -1,6 +1,6 @@
 // URL de tu implementación de Apps Script (termina en /exec).
 // Se rellena al desplegar el backend — ver README.md.
-const API_URL = 'https://script.google.com/macros/s/AKfycbwQkt0yg9_1KU4c_KUyoxbOrpuZtT2Ml5MeKUuNEtJaIypoYE5N7_nRm28RXZHKsBdzdQ/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycbwTEGtScG9jZQx3xP_jSEovPwyBIoRHepRKxrrt7OJ-G5BWTupiLe-k8u6ACZJyR4bbqw/exec';
 
 async function apiGet(action, params) {
   const url = new URL(API_URL);

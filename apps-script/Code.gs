@@ -114,7 +114,7 @@ function doGet(e) {
     let result;
     switch (action) {
       case 'ping':
-        result = { version: 'v9-suscripciones', ahora: new Date().toISOString() };
+        result = { version: 'v10-fix-formato-pagos', ahora: new Date().toISOString() };
         break;
       case 'getClientes':
         result = getClientes();
@@ -189,6 +189,9 @@ function doPost(e) {
         break;
       case 'migrarASuscripciones':
         result = migrarASuscripciones();
+        break;
+      case 'repararFormatoPagos':
+        result = repararFormatoPagos();
         break;
       default:
         throw new Error('Acción POST no reconocida: ' + body.action);
@@ -623,7 +626,10 @@ function migrarAClientes() {
     filasInscripciones.push([a.ID, idCliente, a.Nombre, a.Centro, a.Dia, a.Hora, a.Estado, a.FechaAlta, a.FechaBaja, false]);
   });
 
-  hojaAlumnos.clearContents();
+  // clear() (no solo clearContents()) para no arrastrar formato de celda
+  // heredado de una columna antigua en la misma posición (p.ej. una columna
+  // de fecha/hora previa haría que un número se lea luego como fecha).
+  hojaAlumnos.clear();
   hojaAlumnos.appendRow(['ID', 'ID_Cliente', 'Nombre', 'Centro', 'Dia', 'Hora', 'Estado', 'FechaAlta', 'FechaBaja', 'TarifaEspecial']);
   filasInscripciones.forEach(function (fila) { hojaAlumnos.appendRow(fila); });
   hojaAlumnos.setName(SHEET_INSCRIPCIONES);
@@ -664,7 +670,7 @@ function migrarASuscripciones() {
   const headersInscViejos = hojaInsc.getRange(1, 1, 1, hojaInsc.getLastColumn()).getValues()[0];
   if (headersInscViejos.indexOf('TarifaEspecial') === -1) {
     const filasInsc = sheetToObjects_(hojaInsc);
-    hojaInsc.clearContents();
+    hojaInsc.clear();
     hojaInsc.appendRow(['ID', 'ID_Cliente', 'Nombre', 'Centro', 'Dia', 'Hora', 'Estado', 'FechaAlta', 'FechaBaja', 'TarifaEspecial']);
     filasInsc.forEach(function (a) {
       hojaInsc.appendRow([a.ID, a.ID_Cliente, a.Nombre, a.Centro, a.Dia, a.Hora, a.Estado, a.FechaAlta, a.FechaBaja, false]);
@@ -700,7 +706,7 @@ function migrarASuscripciones() {
       if (p.Notas) grupos[key].notas.push(p.Notas);
     });
 
-    hojaPagos.clearContents();
+    hojaPagos.clear();
     hojaPagos.appendRow(['ID', 'Mes', 'ID_Cliente', 'Nombre', 'Centro', 'ClasesSemana', 'Importe', 'Pagado', 'FechaPago', 'Notas']);
     Object.keys(grupos).forEach(function (key) {
       const g = grupos[key];
@@ -713,7 +719,28 @@ function migrarASuscripciones() {
       ]);
       resultado.pagosMigrados++;
     });
+
+    // Fuerza formato numérico simple: la columna "ClasesSemana" ocupaba antes
+    // la posición de "Hora" y puede arrastrar formato de hora/fecha, lo que
+    // hace que un simple 1 o 2 se lea después como una fecha (1900-01-0X).
+    const filas = hojaPagos.getLastRow() - 1;
+    if (filas > 0) {
+      hojaPagos.getRange(2, hojaPagos.getRange(1, 1, 1, hojaPagos.getLastColumn()).getValues()[0].indexOf('ClasesSemana') + 1, filas, 1).setNumberFormat('0');
+    }
   }
 
   return resultado;
+}
+
+// Reparación puntual de formato si "migrarASuscripciones" ya se ejecutó
+// antes de este arreglo y dejó "ClasesSemana" con formato de fecha/hora.
+function repararFormatoPagos() {
+  const sheet = getSheet_(SHEET_PAGOS);
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const idxClases = headers.indexOf('ClasesSemana');
+  const filas = sheet.getLastRow() - 1;
+  if (filas > 0 && idxClases !== -1) {
+    sheet.getRange(2, idxClases + 1, filas, 1).setNumberFormat('0');
+  }
+  return { reparado: true, filas: filas };
 }
