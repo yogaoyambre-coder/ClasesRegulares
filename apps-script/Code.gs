@@ -5,25 +5,25 @@
  * 1. Sustituye SS_ID por el ID de tu Google Sheet (está en la URL de la hoja).
  * 2. La hoja debe tener estas pestañas con estas cabeceras exactas en la fila 1:
  *
- *    "Clientes":      ID | Nombre | Apellidos | Telefono | Notas
- *    "Inscripciones": ID | ID_Cliente | Nombre | Centro | Dia | Hora | PrecioDefecto | Estado | FechaAlta | FechaBaja
- *    "Pagos":         Mes | ID_Alumno | Nombre | Centro | Dia | Hora | Importe | Pagado | FechaPago | Notas
+ *    "Clientes":      ID | Nombre | Referencia | Telefono | Notas
+ *    "Inscripciones": ID | ID_Cliente | Nombre | Centro | Dia | Hora | Estado | FechaAlta | FechaBaja | TarifaEspecial
+ *    "Pagos":         ID | Mes | ID_Cliente | Nombre | Centro | ClasesSemana | Importe | Pagado | FechaPago | Notas
  *    "Asistencia":    ID | Fecha | ID_Alumno | Nombre | Centro | Dia | Hora | Tipo | Estado | Notas
  *
- *    (Pagos y Asistencia siguen usando "ID_Alumno" como nombre de columna,
- *    pero apunta al ID de la INSCRIPCIÓN — no hace falta migrar esas dos
- *    pestañas, solo lo que antes era "Alumnos".)
+ *    (Asistencia sigue usando "ID_Alumno" como nombre de columna, pero
+ *    apunta al ID de la INSCRIPCIÓN.)
  *
  * 3. Implementar > Nueva implementación > Aplicación web
  *    - Ejecutar como: Yo
  *    - Quién tiene acceso: Cualquier usuario
  *
- * Migración desde la versión anterior (una sola vez): si tu Sheet todavía
- * tiene una pestaña "Alumnos" en vez de "Clientes"+"Inscripciones", llama a
- * TU_URL/exec con POST {"action":"migrarAClientes"} una vez desplegado este
- * código. Crea "Clientes" a partir de los nombres únicos de "Alumnos" y
- * renombra "Alumnos" a "Inscripciones" añadiendo la columna ID_Cliente. Es
- * segura de repetir: si no encuentra la hoja "Alumnos" no hace nada.
+ * Migraciones (una sola vez cada una, seguras de repetir):
+ * - migrarAClientes: del modelo antiguo (una sola pestaña "Alumnos") a
+ *   Clientes + Inscripciones.
+ * - migrarASuscripciones: renombra Apellidos->Referencia en Clientes, añade
+ *   TarifaEspecial a Inscripciones (quita PrecioDefecto si existía), y
+ *   reestructura Pagos de "una fila por clase" a "una fila por cliente y
+ *   centro" según la tarifa de suscripción.
  */
 
 const SS_ID = '1BAXS6x2qk6GPI5-kmN3LPqtdPntm2g0ex8qQt0IALeY';
@@ -31,6 +31,13 @@ const SHEET_CLIENTES = 'Clientes';
 const SHEET_INSCRIPCIONES = 'Inscripciones';
 const SHEET_PAGOS = 'Pagos';
 const SHEET_ASISTENCIA = 'Asistencia';
+
+// Tarifa de suscripción: cuota mensual según centro y clases/semana. No hay
+// precio por clase suelta — es un abono, no una suma de clases.
+const TARIFAS = {
+  'Soma': { 1: 35, 2: 60 },
+  'Gema Lanza': { 1: 35, 2: 55 }
+};
 
 function getSS_() {
   return SpreadsheetApp.openById(SS_ID);
@@ -56,6 +63,10 @@ function formatearValor_(header, value) {
   if (header === 'Hora') return Utilities.formatDate(value, tz, 'HH:mm');
   if (header === 'Mes') return Utilities.formatDate(value, tz, 'yyyy-MM');
   return Utilities.formatDate(value, tz, 'yyyy-MM-dd');
+}
+
+function esVerdadero_(v) {
+  return v === true || v === 'true' || v === 'TRUE';
 }
 
 function sheetToObjects_(sheet) {
@@ -103,7 +114,7 @@ function doGet(e) {
     let result;
     switch (action) {
       case 'ping':
-        result = { version: 'v8-eliminar-asistencia', ahora: new Date().toISOString() };
+        result = { version: 'v9-suscripciones', ahora: new Date().toISOString() };
         break;
       case 'getClientes':
         result = getClientes();
@@ -152,8 +163,14 @@ function doPost(e) {
       case 'reactivarInscripcion':
         result = reactivarInscripcion(body.id);
         break;
+      case 'setTarifaEspecial':
+        result = setTarifaEspecial(body);
+        break;
       case 'setPago':
         result = setPago(body);
+        break;
+      case 'eliminarPago':
+        result = eliminarPago(body.id);
         break;
       case 'setAsistencia':
         result = setAsistencia(body);
@@ -169,6 +186,9 @@ function doPost(e) {
         break;
       case 'migrarAClientes':
         result = migrarAClientes();
+        break;
+      case 'migrarASuscripciones':
+        result = migrarASuscripciones();
         break;
       default:
         throw new Error('Acción POST no reconocida: ' + body.action);
@@ -188,7 +208,7 @@ function addCliente(body) {
   const nuevo = {
     ID: Utilities.getUuid(),
     Nombre: body.nombre,
-    Apellidos: body.apellidos || '',
+    Referencia: body.referencia || '',
     Telefono: body.telefono || '',
     Notas: body.notas || ''
   };
@@ -202,14 +222,14 @@ function actualizarCliente(body) {
   const headers = data[0];
   const idxId = headers.indexOf('ID');
   const idxNombre = headers.indexOf('Nombre');
-  const idxApellidos = headers.indexOf('Apellidos');
+  const idxReferencia = headers.indexOf('Referencia');
   const idxTelefono = headers.indexOf('Telefono');
   const idxNotas = headers.indexOf('Notas');
 
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][idxId]) === String(body.id)) {
       if (body.nombre !== undefined) sheet.getRange(i + 1, idxNombre + 1).setValue(body.nombre);
-      if (body.apellidos !== undefined) sheet.getRange(i + 1, idxApellidos + 1).setValue(body.apellidos);
+      if (body.referencia !== undefined) sheet.getRange(i + 1, idxReferencia + 1).setValue(body.referencia);
       if (body.telefono !== undefined) setValueTexto_(sheet, i + 1, idxTelefono + 1, body.telefono);
       if (body.notas !== undefined) sheet.getRange(i + 1, idxNotas + 1).setValue(body.notas);
       return { updated: true };
@@ -222,10 +242,6 @@ function getInscripciones() {
   return sheetToObjects_(getSheet_(SHEET_INSCRIPCIONES));
 }
 
-function nombreCompletoCliente_(cliente) {
-  return cliente.Apellidos ? cliente.Nombre + ' ' + cliente.Apellidos : cliente.Nombre;
-}
-
 function addInscripcion(body) {
   const clientes = getClientes();
   const cliente = clientes.find(function (c) { return String(c.ID) === String(body.idCliente); });
@@ -235,26 +251,26 @@ function addInscripcion(body) {
   const nueva = {
     ID: Utilities.getUuid(),
     ID_Cliente: cliente.ID,
-    Nombre: nombreCompletoCliente_(cliente),
+    Nombre: cliente.Nombre,
     Centro: body.centro,
     Dia: body.dia,
     Hora: body.hora,
-    PrecioDefecto: body.precioDefecto,
     Estado: 'activo',
     FechaAlta: body.fechaAlta || new Date(),
-    FechaBaja: ''
+    FechaBaja: '',
+    TarifaEspecial: !!body.tarifaEspecial
   };
   appendRow_(sheet, nueva);
   return nueva;
 }
 
-// Correccion puntual de una inscripcion ya creada (nombre, precio, horario...).
+// Corrección puntual de una inscripción ya creada (nombre, horario...).
 function actualizarInscripcion(body) {
   const sheet = getSheet_(SHEET_INSCRIPCIONES);
   const data = sheet.getDataRange().getValues();
   const headers = data[0];
   const idxId = headers.indexOf('ID');
-  const campos = ['Nombre', 'Centro', 'Dia', 'Hora', 'PrecioDefecto'];
+  const campos = ['Nombre', 'Centro', 'Dia', 'Hora'];
 
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][idxId]) === String(body.id)) {
@@ -306,16 +322,43 @@ function reactivarInscripcion(id) {
   throw new Error('Inscripción no encontrada');
 }
 
+// Marca (o desmarca) tarifa especial para TODAS las inscripciones de un
+// cliente en un centro concreto — la tarifa especial es por cliente+centro,
+// no por inscripción individual.
+function setTarifaEspecial(body) {
+  const sheet = getSheet_(SHEET_INSCRIPCIONES);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const idxCliente = headers.indexOf('ID_Cliente');
+  const idxCentro = headers.indexOf('Centro');
+  const idxEspecial = headers.indexOf('TarifaEspecial');
+  let actualizadas = 0;
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idxCliente]) === String(body.idCliente) && data[i][idxCentro] === body.centro) {
+      sheet.getRange(i + 1, idxEspecial + 1).setValue(!!body.especial);
+      actualizadas++;
+    }
+  }
+  return { actualizadas: actualizadas };
+}
+
 /**
- * Devuelve los pagos de un mes (YYYY-MM). Si una inscripción activa en ese
- * mes todavía no tiene fila de pago, la crea automáticamente con su precio
- * por defecto y Pagado=false.
+ * Devuelve los pagos de un mes (YYYY-MM). Una fila = un cliente + un centro
+ * (no una clase suelta): es una cuota de suscripción. Si un cliente activo
+ * ese mes en un centro todavía no tiene fila de pago, se crea con el
+ * importe de tarifa según cuántas inscripciones activas tiene en ese centro
+ * (1 o 2 clases/semana) — o vacío si tiene marcada tarifa especial.
  */
 function getPagosMes(mes) {
   const sheetPagos = getSheet_(SHEET_PAGOS);
   const pagos = sheetToObjects_(sheetPagos).filter(function (p) { return p.Mes === mes; });
 
   const inscripciones = getInscripciones();
+  const clientes = getClientes();
+  const clientePorId = {};
+  clientes.forEach(function (c) { clientePorId[c.ID] = c; });
+
   const partes = mes.split('-').map(Number);
   const primerDiaMes = new Date(partes[0], partes[1] - 1, 1);
   const ultimoDiaMes = new Date(partes[0], partes[1], 0);
@@ -328,19 +371,31 @@ function getPagosMes(mes) {
     return true;
   });
 
-  const idsConPago = {};
-  pagos.forEach(function (p) { idsConPago[p.ID_Alumno] = true; });
+  const grupos = {}; // key = idCliente|centro
+  activasEnMes.forEach(function (a) {
+    const key = a.ID_Cliente + '|' + a.Centro;
+    if (!grupos[key]) grupos[key] = { idCliente: a.ID_Cliente, centro: a.Centro, clases: 0, especial: false };
+    grupos[key].clases++;
+    if (esVerdadero_(a.TarifaEspecial)) grupos[key].especial = true;
+  });
 
-  const nuevas = activasEnMes.filter(function (a) { return !idsConPago[a.ID]; });
-  nuevas.forEach(function (a) {
+  const idsConPago = {};
+  pagos.forEach(function (p) { idsConPago[p.ID_Cliente + '|' + p.Centro] = true; });
+
+  Object.keys(grupos).forEach(function (key) {
+    if (idsConPago[key]) return;
+    const g = grupos[key];
+    const cliente = clientePorId[g.idCliente];
+    const tarifaCentro = TARIFAS[g.centro] || {};
+    const importe = g.especial ? '' : (tarifaCentro[g.clases] !== undefined ? tarifaCentro[g.clases] : '');
     const nuevoPago = {
+      ID: Utilities.getUuid(),
       Mes: mes,
-      ID_Alumno: a.ID,
-      Nombre: a.Nombre,
-      Centro: a.Centro,
-      Dia: a.Dia,
-      Hora: a.Hora,
-      Importe: a.PrecioDefecto,
+      ID_Cliente: g.idCliente,
+      Nombre: cliente ? cliente.Nombre : '',
+      Centro: g.centro,
+      ClasesSemana: g.clases,
+      Importe: importe,
       Pagado: false,
       FechaPago: '',
       Notas: ''
@@ -357,14 +412,17 @@ function setPago(body) {
   const data = sheet.getDataRange().getValues();
   const headers = data[0];
   const idxMes = headers.indexOf('Mes');
-  const idxId = headers.indexOf('ID_Alumno');
+  const idxCliente = headers.indexOf('ID_Cliente');
+  const idxCentro = headers.indexOf('Centro');
   const idxImporte = headers.indexOf('Importe');
   const idxPagado = headers.indexOf('Pagado');
   const idxFecha = headers.indexOf('FechaPago');
   const idxNotas = headers.indexOf('Notas');
 
   for (let i = 1; i < data.length; i++) {
-    if (formatearValor_('Mes', data[i][idxMes]) === body.mes && String(data[i][idxId]) === String(body.idAlumno)) {
+    if (formatearValor_('Mes', data[i][idxMes]) === body.mes &&
+        String(data[i][idxCliente]) === String(body.idCliente) &&
+        data[i][idxCentro] === body.centro) {
       sheet.getRange(i + 1, idxImporte + 1).setValue(body.importe);
       sheet.getRange(i + 1, idxPagado + 1).setValue(body.pagado);
       sheet.getRange(i + 1, idxFecha + 1).setValue(body.fechaPago || '');
@@ -372,7 +430,22 @@ function setPago(body) {
       return { updated: true };
     }
   }
-  throw new Error('No se encontró el pago de esa inscripción para ese mes');
+  throw new Error('No se encontró el pago de ese cliente/centro para ese mes');
+}
+
+function eliminarPago(id) {
+  const sheet = getSheet_(SHEET_PAGOS);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const idxId = headers.indexOf('ID');
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idxId]) === String(id)) {
+      sheet.deleteRow(i + 1);
+      return { deleted: true };
+    }
+  }
+  throw new Error('No se encontró ese pago');
 }
 
 /**
@@ -520,7 +593,7 @@ function cancelarSesion(body) {
 
 /**
  * Migración única desde el modelo antiguo (una sola pestaña "Alumnos") al
- * nuevo modelo Clientes + Inscripciones. Idempotente: si no existe una hoja
+ * modelo Clientes + Inscripciones. Idempotente: si no existe una hoja
  * "Alumnos" no hace nada (ya migrado, o instalación nueva).
  */
 function migrarAClientes() {
@@ -533,7 +606,7 @@ function migrarAClientes() {
   let hojaClientes = ss.getSheetByName(SHEET_CLIENTES);
   if (!hojaClientes) {
     hojaClientes = ss.insertSheet(SHEET_CLIENTES);
-    hojaClientes.appendRow(['ID', 'Nombre', 'Apellidos', 'Telefono', 'Notas']);
+    hojaClientes.appendRow(['ID', 'Nombre', 'Referencia', 'Telefono', 'Notas']);
   }
 
   const filasAlumnos = sheetToObjects_(hojaAlumnos);
@@ -547,11 +620,11 @@ function migrarAClientes() {
       idClientePorNombre[a.Nombre] = idCliente;
       hojaClientes.appendRow([idCliente, a.Nombre, '', '', '']);
     }
-    filasInscripciones.push([a.ID, idCliente, a.Nombre, a.Centro, a.Dia, a.Hora, a.PrecioDefecto, a.Estado, a.FechaAlta, a.FechaBaja]);
+    filasInscripciones.push([a.ID, idCliente, a.Nombre, a.Centro, a.Dia, a.Hora, a.Estado, a.FechaAlta, a.FechaBaja, false]);
   });
 
   hojaAlumnos.clearContents();
-  hojaAlumnos.appendRow(['ID', 'ID_Cliente', 'Nombre', 'Centro', 'Dia', 'Hora', 'PrecioDefecto', 'Estado', 'FechaAlta', 'FechaBaja']);
+  hojaAlumnos.appendRow(['ID', 'ID_Cliente', 'Nombre', 'Centro', 'Dia', 'Hora', 'Estado', 'FechaAlta', 'FechaBaja', 'TarifaEspecial']);
   filasInscripciones.forEach(function (fila) { hojaAlumnos.appendRow(fila); });
   hojaAlumnos.setName(SHEET_INSCRIPCIONES);
 
@@ -560,4 +633,87 @@ function migrarAClientes() {
     clientesCreados: Object.keys(idClientePorNombre).length,
     inscripcionesMigradas: filasInscripciones.length
   };
+}
+
+/**
+ * Migración única al modelo de suscripciones:
+ * 1. Clientes: renombra la cabecera "Apellidos" a "Referencia" (mismo dato).
+ * 2. Inscripciones: añade "TarifaEspecial" (false por defecto) y quita
+ *    "PrecioDefecto" si existía (ya no se usa: la tarifa depende de cuántas
+ *    inscripciones activas tiene un cliente en un centro, no de un precio
+ *    guardado por clase).
+ * 3. Pagos: pasa de "una fila por clase" a "una fila por cliente+centro",
+ *    con el importe recalculado según la tarifa de suscripción. Agrupa las
+ *    filas viejas de un mismo mes/cliente/centro; "pagado" queda en true si
+ *    alguna de las filas agrupadas ya estaba marcada como pagada.
+ * Cada paso comprueba si ya se aplicó (por la presencia de las columnas
+ * nuevas) para poder ejecutarla más de una vez sin duplicar nada.
+ */
+function migrarASuscripciones() {
+  const resultado = { clientesRenombrado: false, inscripcionesActualizadas: false, pagosMigrados: 0 };
+
+  const hojaClientes = getSheet_(SHEET_CLIENTES);
+  const headersClientes = hojaClientes.getRange(1, 1, 1, hojaClientes.getLastColumn()).getValues()[0];
+  const idxApellidos = headersClientes.indexOf('Apellidos');
+  if (idxApellidos !== -1) {
+    hojaClientes.getRange(1, idxApellidos + 1).setValue('Referencia');
+    resultado.clientesRenombrado = true;
+  }
+
+  const hojaInsc = getSheet_(SHEET_INSCRIPCIONES);
+  const headersInscViejos = hojaInsc.getRange(1, 1, 1, hojaInsc.getLastColumn()).getValues()[0];
+  if (headersInscViejos.indexOf('TarifaEspecial') === -1) {
+    const filasInsc = sheetToObjects_(hojaInsc);
+    hojaInsc.clearContents();
+    hojaInsc.appendRow(['ID', 'ID_Cliente', 'Nombre', 'Centro', 'Dia', 'Hora', 'Estado', 'FechaAlta', 'FechaBaja', 'TarifaEspecial']);
+    filasInsc.forEach(function (a) {
+      hojaInsc.appendRow([a.ID, a.ID_Cliente, a.Nombre, a.Centro, a.Dia, a.Hora, a.Estado, a.FechaAlta, a.FechaBaja, false]);
+    });
+    resultado.inscripcionesActualizadas = true;
+  }
+
+  const hojaPagos = getSheet_(SHEET_PAGOS);
+  const headersPagosViejos = hojaPagos.getRange(1, 1, 1, hojaPagos.getLastColumn()).getValues()[0];
+  if (headersPagosViejos.indexOf('ID_Cliente') === -1) {
+    const filasPagosViejas = sheetToObjects_(hojaPagos);
+    const inscripcionesActuales = getInscripciones();
+    const inscPorId = {};
+    inscripcionesActuales.forEach(function (i) { inscPorId[i.ID] = i; });
+    const clientes = getClientes();
+    const clientePorId = {};
+    clientes.forEach(function (c) { clientePorId[c.ID] = c; });
+
+    const grupos = {}; // key = Mes|IDCliente|Centro
+    filasPagosViejas.forEach(function (p) {
+      const insc = inscPorId[p.ID_Alumno];
+      const idCliente = insc ? insc.ID_Cliente : null;
+      if (!idCliente) return; // fila huérfana (inscripción ya no existe), se descarta
+      const key = p.Mes + '|' + idCliente + '|' + p.Centro;
+      if (!grupos[key]) {
+        grupos[key] = { mes: p.Mes, idCliente: idCliente, centro: p.Centro, clases: 0, pagado: false, fechaPago: '', notas: [] };
+      }
+      grupos[key].clases++;
+      if (esVerdadero_(p.Pagado)) {
+        grupos[key].pagado = true;
+        if (p.FechaPago) grupos[key].fechaPago = p.FechaPago;
+      }
+      if (p.Notas) grupos[key].notas.push(p.Notas);
+    });
+
+    hojaPagos.clearContents();
+    hojaPagos.appendRow(['ID', 'Mes', 'ID_Cliente', 'Nombre', 'Centro', 'ClasesSemana', 'Importe', 'Pagado', 'FechaPago', 'Notas']);
+    Object.keys(grupos).forEach(function (key) {
+      const g = grupos[key];
+      const cliente = clientePorId[g.idCliente];
+      const tarifaCentro = TARIFAS[g.centro] || {};
+      const importe = tarifaCentro[g.clases] !== undefined ? tarifaCentro[g.clases] : '';
+      hojaPagos.appendRow([
+        Utilities.getUuid(), g.mes, g.idCliente, cliente ? cliente.Nombre : '', g.centro,
+        g.clases, importe, g.pagado, g.fechaPago, g.notas.join(' / ')
+      ]);
+      resultado.pagosMigrados++;
+    });
+  }
+
+  return resultado;
 }

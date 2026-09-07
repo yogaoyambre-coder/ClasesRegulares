@@ -26,31 +26,34 @@ Crea una hoja de cálculo nueva en Google Sheets con cuatro pestañas:
 
 **Pestaña "Clientes"** (fila 1 = cabeceras exactas):
 
-| ID | Nombre | Apellidos | Telefono | Notas |
+| ID | Nombre | Referencia | Telefono | Notas |
 |----|--------|-----------|----------|-------|
+
+`Referencia` es texto libre tuyo para identificar de un vistazo en qué grupo(s) está (ej. `SV L 17:30`, o `SV L 17:30 + GL X 09:00` si está en varias) — no se calcula solo, lo escribes tú.
 
 **Pestaña "Inscripciones"** (fila 1 = cabeceras exactas) — un cliente inscrito en una clase concreta:
 
-| ID | ID_Cliente | Nombre | Centro | Dia | Hora | PrecioDefecto | Estado | FechaAlta | FechaBaja |
-|----|-----------|--------|--------|-----|------|---------------|--------|-----------|-----------|
+| ID | ID_Cliente | Nombre | Centro | Dia | Hora | Estado | FechaAlta | FechaBaja | TarifaEspecial |
+|----|-----------|--------|--------|-----|------|--------|-----------|-----------|----------------|
 
-**Pestaña "Pagos"** (fila 1 = cabeceras exactas):
+**Pestaña "Pagos"** (fila 1 = cabeceras exactas) — una fila por **cliente y centro** (una cuota de suscripción, no una clase suelta):
 
-| Mes | ID_Alumno | Nombre | Centro | Dia | Hora | Importe | Pagado | FechaPago | Notas |
-|-----|-----------|--------|--------|-----|------|---------|--------|-----------|-------|
+| ID | Mes | ID_Cliente | Nombre | Centro | ClasesSemana | Importe | Pagado | FechaPago | Notas |
+|----|-----|-----------|--------|--------|--------------|---------|--------|-----------|-------|
 
 **Pestaña "Asistencia"** (fila 1 = cabeceras exactas):
 
 | ID | Fecha | ID_Alumno | Nombre | Centro | Dia | Hora | Tipo | Estado | Notas |
 |----|-------|-----------|--------|--------|-----|------|------|--------|-------|
 
-> `ID_Alumno` en Pagos y Asistencia apunta al `ID` de **Inscripciones**, no al de Clientes — el nombre de columna se mantuvo por compatibilidad con datos ya existentes.
+> `ID_Alumno` en Asistencia apunta al `ID` de **Inscripciones**, no al de Clientes — el nombre de columna se mantuvo por compatibilidad con datos ya existentes.
 
-Todo se puede rellenar desde la propia app (Clientes → Cobros → Asistencia). Si ya tenías datos de una versión anterior con una sola pestaña "Alumnos", ver la sección de migración abajo.
+Todo se puede rellenar desde la propia app (Clientes → Cobros → Asistencia). Si vienes de una versión anterior, ver las migraciones abajo.
 
-#### Migración desde una pestaña "Alumnos" única
+#### Migraciones (una sola vez cada una, seguras de repetir)
 
-Si tu Sheet viene de antes de que existiera el módulo de Clientes, no hace falta migrar nada a mano: en cuanto despliegues el `Code.gs` actualizado, haz una petición POST a `TU_URL/exec` con `{"action":"migrarAClientes"}`. Crea "Clientes" a partir de los nombres únicos que había en "Alumnos" y renombra "Alumnos" a "Inscripciones" añadiendo la columna `ID_Cliente`. Es segura de ejecutar más de una vez: si no encuentra la hoja "Alumnos" no hace nada.
+- **`migrarAClientes`**: si tu Sheet viene de antes de que existiera el módulo de Clientes (una sola pestaña "Alumnos"), haz un POST a `TU_URL/exec` con `{"action":"migrarAClientes"}`. Crea "Clientes" a partir de los nombres únicos que había en "Alumnos" y renombra "Alumnos" a "Inscripciones". Si no encuentra la hoja "Alumnos" no hace nada.
+- **`migrarASuscripciones`**: si vienes de antes del modelo de tarifas por suscripción, haz un POST con `{"action":"migrarASuscripciones"}`. Renombra `Apellidos`→`Referencia` en Clientes, añade `TarifaEspecial` a Inscripciones (quitando `PrecioDefecto`, que ya no se usa), y reestructura Pagos de "una fila por clase" a "una fila por cliente+centro" recalculando el importe según la tabla de tarifas. Cada paso comprueba si ya se aplicó, así que es segura de ejecutar más de una vez.
 
 ### 2. Despliega el backend (Apps Script)
 
@@ -82,15 +85,26 @@ Sube `index.html`, `css/` y `js/` a tu hosting habitual (por ejemplo, embebido e
 
 ### Clientes
 
-- Un **cliente** es la persona (nombre, apellidos, teléfono, notas). Una **inscripción** es su presencia en una clase concreta (centro+día+hora+precio).
+- Un **cliente** es la persona (nombre completo, referencia, teléfono, notas). Una **inscripción** es su presencia en una clase concreta (centro+día+hora).
 - Un mismo cliente puede tener varias inscripciones (estar en más de un grupo) sin repetir sus datos de contacto.
 - El nombre que se guarda en Pagos/Asistencia es una copia del nombre del cliente en el momento de la inscripción — si luego cambias el nombre en Clientes, las inscripciones ya creadas no se actualizan solas.
+- Por defecto la lista oculta a quien está de baja del todo (sin ninguna inscripción activa); hay un checkbox para mostrarlos.
+- "Gestionar" (en la ficha del cliente o desde una fila de Cobros) permite dar de baja un grupo concreto y marcar/desmarcar tarifa especial por centro.
 
 ### Cobros
 
-- Un alumno tiene un **precio por defecto**, pero el importe de cada mes es editable individualmente (por si aplica un descuento puntual).
-- Dar de baja a un alumno no borra su historial: solo deja de generar filas de pago en los meses futuros.
-- Al abrir un mes/clase por primera vez, la app crea automáticamente las filas de pago (pendientes) para todos los alumnos activos de esa clase.
+- **Es una tarifa de suscripción, no de clases sueltas.** El importe depende de cuántas inscripciones activas tiene un cliente en un centro (1 o 2 clases/semana), según esta tabla fija en `Code.gs`:
+
+  | Centro | 1 clase/semana | 2 clases/semana |
+  |---|---|---|
+  | Soma | 35€ | 60€ |
+  | Gema Lanza | 35€ | 55€ |
+
+  Si algún día alguien tiene 3+ clases/semana en el mismo centro (hoy no hay ningún caso), no hay tarifa definida y el importe queda vacío como si fuera especial.
+- **Tarifa especial**: marcada por cliente+centro desde "Gestionar", deja el importe vacío para rellenarlo tú a mano (bonos, gente que no cobras, etc.).
+- La pantalla de Cobros va por **Centro → lista de clientes** de ese centro (no por clase/horario, ya que la cuota es por cliente): cada fila es una cuota mensual, editable.
+- Dar de baja un grupo no borra el historial: dentro del mes en curso, la cuota sigue visible (marcada "de baja" si ya no le queda ningún grupo activo en ese centro) por si falta cobrarla; desde el mes siguiente deja de generarse.
+- Al abrir un mes/centro por primera vez, la app crea automáticamente las filas de pago (pendientes, con el importe de tarifa) para todos los clientes activos en ese centro.
 
 ### Asistencia
 

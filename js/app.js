@@ -11,12 +11,12 @@ const ESTADOS_ASISTENCIA = [
 const state = {
   modulo: 'cobros', // 'cobros' | 'asistencia' | 'clientes'
   mes: mesActual(),
-  screen: 'centro', // 'centro' | 'horario' | 'alumnos' | 'sesiones' | 'sesion'
+  screen: 'centro', // 'centro' | 'pagos' (cobros) | 'horario' | 'sesiones' | 'sesion' (asistencia)
   centro: null,
   horario: null, // { dia, hora }
   clientes: [],
-  alumnos: [], // inscripciones (centro+dia+hora+precio de un cliente)
-  pagos: [],
+  alumnos: [], // inscripciones (cliente + centro + día + hora)
+  pagos: [], // cuotas de suscripción del mes (una fila por cliente+centro)
   fechasGuardadas: [], // fechas de sesiones ya usadas para el horario/mes actual
   sesionFecha: null,
   asistencias: [],
@@ -33,6 +33,10 @@ function mesActual() {
 
 function hoyISO() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function esVerdadero(v) {
+  return v === true || v === 'true' || v === 'TRUE';
 }
 
 const app = document.getElementById('app');
@@ -121,12 +125,13 @@ function horariosDeCentro(centro) {
   });
 }
 
-function pagosDeHorario() {
-  if (!state.horario) return [];
+function inscripcionesDeCliente(idCliente) {
+  return state.alumnos.filter(function (a) { return String(a.ID_Cliente) === String(idCliente); });
+}
+
+function pagosDeCentro() {
   return state.pagos
-    .filter(function (p) {
-      return p.Centro === state.centro && p.Dia === state.horario.dia && p.Hora === state.horario.hora;
-    })
+    .filter(function (p) { return p.Centro === state.centro; })
     .sort(function (a, b) { return a.Nombre.localeCompare(b.Nombre); });
 }
 
@@ -179,7 +184,7 @@ function render() {
   if (mostrarMes) {
     document.getElementById('mes-input').addEventListener('change', async function (e) {
       state.mes = e.target.value;
-      if (state.modulo === 'cobros' && state.screen === 'alumnos') {
+      if (state.modulo === 'cobros' && state.screen !== 'centro') {
         await cargarPagosMes();
       } else if (state.modulo === 'asistencia' && (state.screen === 'sesiones' || state.screen === 'sesion')) {
         state.screen = 'sesiones';
@@ -223,17 +228,13 @@ function renderScreen() {
   }
   if (state.modulo === 'clientes') return renderClientes();
   if (state.screen === 'centro') return renderCentros();
+  if (state.modulo === 'cobros') return renderPagosCentro();
   if (state.screen === 'horario') return renderHorarios();
-  if (state.modulo === 'cobros') return renderAlumnos();
   if (state.screen === 'sesiones') return renderSesiones();
   return renderSesion();
 }
 
 // --- Clientes ---
-
-function inscripcionesDeCliente(idCliente) {
-  return state.alumnos.filter(function (a) { return String(a.ID_Cliente) === String(idCliente); });
-}
 
 // Compara solo los últimos 9 dígitos (formato móvil español) para que no
 // falle por espacios/guiones, o por escribir el "+34" en una y en otra no.
@@ -255,8 +256,7 @@ function avisoTelefonoDuplicado(telefono, excluirId) {
   if (!telefono) return true;
   const existente = buscarClientePorTelefono(telefono, excluirId);
   if (!existente) return true;
-  const nombreExistente = existente.Nombre + (existente.Apellidos ? ' ' + existente.Apellidos : '');
-  return confirm('Ya existe un cliente con este teléfono: ' + nombreExistente + '.\n\n¿Crear de todas formas? (puede ser normal si comparten teléfono, ej. familiares)');
+  return confirm('Ya existe un cliente con este teléfono: ' + existente.Nombre + '.\n\n¿Crear de todas formas? (puede ser normal si comparten teléfono, ej. familiares)');
 }
 
 // Solo "de baja del todo": tiene inscripciones, pero ninguna activa. Un
@@ -312,20 +312,21 @@ function renderClientes() {
 }
 
 function renderClienteCard(c) {
-  const activas = inscripcionesDeCliente(c.ID).filter(function (i) { return i.Estado === 'activo'; });
-  const sinInscripcionesActivas = activas.length === 0 && inscripcionesDeCliente(c.ID).length > 0;
+  const inscs = inscripcionesDeCliente(c.ID);
+  const activas = inscs.filter(function (i) { return i.Estado === 'activo'; });
+  const sinInscripcionesActivas = activas.length === 0 && inscs.length > 0;
   return '' +
     '<div class="card">' +
       '<div class="alumno-top">' +
-        '<span class="alumno-nombre">' + c.Nombre + (c.Apellidos ? ' ' + c.Apellidos : '') +
+        '<span class="alumno-nombre">' + c.Nombre + (c.Referencia ? ' — ' + c.Referencia : '') +
           (sinInscripcionesActivas ? ' <span class="alumno-meta">(de baja)</span>' : '') +
         '</span>' +
         '<button class="back-link" data-accion="editar-cliente" data-id="' + c.ID + '">Editar</button>' +
       '</div>' +
       (c.Telefono ? '<div class="alumno-meta">' + c.Telefono + '</div>' : '') +
       (c.Notas ? '<div class="alumno-meta">' + c.Notas + '</div>' : '') +
-      (activas.length > 0
-        ? '<button class="btn-danger-link" data-accion="abrir-baja-cliente" data-id="' + c.ID + '">Dar de baja</button>'
+      (inscs.length > 0
+        ? '<button class="btn-danger-link" data-accion="gestionar-cliente" data-id="' + c.ID + '">Gestionar</button>'
         : '') +
     '</div>';
 }
@@ -352,47 +353,53 @@ function renderHorarios() {
           return '<button class="pill" data-accion="elegir-horario" data-dia="' + h.dia + '" data-hora="' + h.hora + '">' +
             h.dia + ' ' + h.hora + '</button>';
         }).join('') +
-        '</div>') +
-    (state.modulo === 'cobros'
-      ? '<button class="btn btn-secondary btn-block" data-accion="abrir-alta-clase">+ Añadir alumno/a a una clase nueva</button>'
-      : '');
+        '</div>');
 }
 
-function renderAlumnos() {
-  const pagos = pagosDeHorario();
+// --- Cobros: cuota de suscripción por cliente y centro ---
+
+function clienteDeBajaEnCentro(idCliente, centro) {
+  const insc = inscripcionesDeCliente(idCliente).filter(function (i) { return i.Centro === centro; });
+  return insc.length > 0 && !insc.some(function (i) { return i.Estado === 'activo'; });
+}
+
+function renderPagosCentro() {
+  const pagos = pagosDeCentro();
   const pagados = pagos.filter(esPagado).length;
   return '' +
-    '<div class="top-bar"><button class="back-link" data-accion="volver-horario">&larr; Clases</button></div>' +
-    '<div class="section-title">' + state.centro + ' — ' + state.horario.dia + ' ' + state.horario.hora + '</div>' +
+    '<div class="top-bar"><button class="back-link" data-accion="volver-centro">&larr; Centros</button></div>' +
+    '<div class="section-title">' + state.centro + '</div>' +
     '<div class="resumen-mes">' + pagados + ' de ' + pagos.length + ' pagados este mes</div>' +
     (pagos.length === 0
-      ? '<p class="empty-state">No hay alumnos/as en esta clase para este mes.</p>'
-      : pagos.map(renderAlumnoCard).join('')) +
-    '<button class="btn btn-primary btn-block" data-accion="abrir-alta-alumno">+ Alta en esta clase</button>';
+      ? '<p class="empty-state">No hay clientes en este centro para este mes.</p>'
+      : pagos.map(renderPagoCard).join('')) +
+    '<button class="btn btn-primary btn-block" data-accion="abrir-alta-alumno">+ Alta en ' + state.centro + '</button>';
 }
 
 function esPagado(p) {
   return p.Pagado === true || p.Pagado === 'TRUE' || p.Pagado === 'true';
 }
 
-function inscripcionPorId(id) {
-  return state.alumnos.find(function (a) { return String(a.ID) === String(id); });
-}
-
-function renderAlumnoCard(p) {
+function renderPagoCard(p) {
   const pagado = esPagado(p);
-  const inscripcion = inscripcionPorId(p.ID_Alumno);
-  const esBaja = inscripcion && inscripcion.Estado === 'baja';
+  const especial = p.Importe === '' || p.Importe === null || p.Importe === undefined;
+  const clases = Number(p.ClasesSemana) || 0;
+  const etiqueta = especial
+    ? 'Tarifa especial'
+    : (clases + (clases === 1 ? ' clase/semana' : ' clases/semana'));
+  const clave = p.ID_Cliente + '|' + p.Centro;
+  const deBaja = clienteDeBajaEnCentro(p.ID_Cliente, p.Centro);
   return '' +
     '<div class="card alumno-card ' + (pagado ? 'pagado' : 'pendiente') + '">' +
       '<div class="alumno-top">' +
-        '<span class="alumno-nombre">' + p.Nombre + (esBaja ? ' <span class="alumno-meta">(de baja)</span>' : '') + '</span>' +
-        (esBaja ? '' : '<button class="btn-danger-link" data-accion="confirmar-baja" data-id="' + p.ID_Alumno + '" data-nombre="' + p.Nombre + '">Dar de baja</button>') +
+        '<span class="alumno-nombre">' + p.Nombre + (deBaja ? ' <span class="alumno-meta">(de baja)</span>' : '') + '</span>' +
+        '<button class="back-link" data-accion="gestionar-cliente" data-id="' + p.ID_Cliente + '">Gestionar</button>' +
       '</div>' +
+      '<div class="alumno-meta">' + etiqueta + '</div>' +
       '<div class="alumno-controls">' +
-        '<input type="checkbox" class="checkbox-pagado" data-accion="toggle-pagado" data-id="' + p.ID_Alumno + '" ' + (pagado ? 'checked' : '') + '>' +
+        '<input type="checkbox" class="checkbox-pagado" data-accion="toggle-pagado" data-key="' + clave + '" ' + (pagado ? 'checked' : '') + '>' +
         '<span>Pagado</span>' +
-        '<input type="number" class="importe-input" data-accion="cambiar-importe" data-id="' + p.ID_Alumno + '" value="' + p.Importe + '" step="0.5">' +
+        '<input type="number" class="importe-input" data-accion="cambiar-importe" data-key="' + clave + '" value="' + (especial ? '' : p.Importe) + '" step="0.5" placeholder="' + (especial ? 'importe' : '') + '">' +
         '<span>€</span>' +
       '</div>' +
       (pagado && p.FechaPago ? '<div class="alumno-meta">Pagado el ' + formateaFecha(p.FechaPago) + '</div>' : '') +
@@ -488,10 +495,15 @@ function bindScreenEvents() {
         render();
       });
     } else if (accion === 'elegir-centro') {
-      el.addEventListener('click', function () {
+      el.addEventListener('click', async function () {
         state.centro = el.dataset.centro;
-        state.screen = 'horario';
-        render();
+        if (state.modulo === 'cobros') {
+          state.screen = 'pagos';
+          await cargarPagosMes();
+        } else {
+          state.screen = 'horario';
+          render();
+        }
       });
     } else if (accion === 'volver-centro') {
       el.addEventListener('click', function () {
@@ -502,13 +514,8 @@ function bindScreenEvents() {
     } else if (accion === 'elegir-horario') {
       el.addEventListener('click', async function () {
         state.horario = { dia: el.dataset.dia, hora: el.dataset.hora };
-        if (state.modulo === 'asistencia') {
-          state.screen = 'sesiones';
-          await cargarFechasSesion();
-        } else {
-          state.screen = 'alumnos';
-          await cargarPagosMes();
-        }
+        state.screen = 'sesiones';
+        await cargarFechasSesion();
       });
     } else if (accion === 'volver-horario') {
       el.addEventListener('click', function () {
@@ -518,23 +525,17 @@ function bindScreenEvents() {
       });
     } else if (accion === 'toggle-pagado') {
       el.addEventListener('change', async function () {
-        await actualizarPago(el.dataset.id, { Pagado: el.checked, FechaPago: el.checked ? hoyISO() : '' });
+        const partes = el.dataset.key.split('|');
+        await actualizarPago(partes[0], partes[1], { Pagado: el.checked, FechaPago: el.checked ? hoyISO() : '' });
       });
     } else if (accion === 'cambiar-importe') {
       el.addEventListener('change', async function () {
-        await actualizarPago(el.dataset.id, { Importe: parseFloat(el.value) || 0 });
-      });
-    } else if (accion === 'confirmar-baja') {
-      el.addEventListener('click', function () {
-        abrirModalBaja(el.dataset.id, el.dataset.nombre);
+        const partes = el.dataset.key.split('|');
+        await actualizarPago(partes[0], partes[1], { Importe: parseFloat(el.value) || 0 });
       });
     } else if (accion === 'abrir-alta-alumno') {
       el.addEventListener('click', function () {
-        abrirModalAlta(state.centro, state.horario.dia, state.horario.hora);
-      });
-    } else if (accion === 'abrir-alta-clase') {
-      el.addEventListener('click', function () {
-        abrirModalAlta(state.centro, '', '');
+        abrirModalAlta(state.centro);
       });
     } else if (accion === 'elegir-sesion') {
       el.addEventListener('click', async function () {
@@ -576,22 +577,23 @@ function bindScreenEvents() {
       el.addEventListener('click', function () {
         abrirModalEditarCliente(el.dataset.id);
       });
-    } else if (accion === 'abrir-baja-cliente') {
+    } else if (accion === 'gestionar-cliente') {
       el.addEventListener('click', function () {
-        abrirModalBajaCliente(el.dataset.id);
+        abrirModalGestionarCliente(el.dataset.id);
       });
     }
   });
 }
 
-async function actualizarPago(idAlumno, cambios) {
-  const pago = state.pagos.find(function (p) { return String(p.ID_Alumno) === String(idAlumno); });
+async function actualizarPago(idCliente, centro, cambios) {
+  const pago = state.pagos.find(function (p) { return String(p.ID_Cliente) === String(idCliente) && p.Centro === centro; });
   if (!pago) return;
   Object.assign(pago, cambios);
   try {
     await apiPost('setPago', {
       mes: state.mes,
-      idAlumno: idAlumno,
+      idCliente: idCliente,
+      centro: centro,
       importe: pago.Importe,
       pagado: pago.Pagado === true || pago.Pagado === 'true' || pago.Pagado === 'TRUE',
       fechaPago: pago.FechaPago,
@@ -627,44 +629,14 @@ function mostrarToast(texto) {
   setTimeout(function () { toast.remove(); }, 2200);
 }
 
-// --- Modal: dar de baja ---
-
-function abrirModalBaja(id, nombre) {
-  const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
-  overlay.innerHTML = '' +
-    '<div class="modal-sheet">' +
-      '<h2>Dar de baja a ' + nombre + '</h2>' +
-      '<p>Dejará de aparecer en los próximos meses y sesiones, pero se conserva su historial.</p>' +
-      '<div class="modal-actions">' +
-        '<button class="btn btn-secondary" id="cancelar-baja">Cancelar</button>' +
-        '<button class="btn btn-primary" id="confirmar-baja-btn">Confirmar baja</button>' +
-      '</div>' +
-    '</div>';
-  document.body.appendChild(overlay);
-
-  document.getElementById('cancelar-baja').addEventListener('click', function () { overlay.remove(); });
-  document.getElementById('confirmar-baja-btn').addEventListener('click', async function () {
-    try {
-      await apiPost('bajaInscripcion', { id: id, fechaBaja: hoyISO() });
-      mostrarToast('Alumno/a dado de baja');
-      overlay.remove();
-      await cargarAlumnos();
-      await cargarPagosMes();
-    } catch (err) {
-      mostrarToast('Error: ' + err.message);
-    }
-  });
-}
-
 // --- Modal: alta de inscripción (elige cliente existente o crea uno nuevo) ---
 
 const OPCION_CLIENTE_NUEVO = '__nuevo__';
 
-function abrirModalAlta(centroFijo, diaFijo, horaFijo) {
+function abrirModalAlta(centroFijo) {
   const clientesOrdenados = state.clientes.slice().sort(function (a, b) { return a.Nombre.localeCompare(b.Nombre); });
   const opcionesCliente = clientesOrdenados.map(function (c) {
-    return '<option value="' + c.ID + '">' + c.Nombre + (c.Apellidos ? ' ' + c.Apellidos : '') + '</option>';
+    return '<option value="' + c.ID + '">' + c.Nombre + (c.Referencia ? ' (' + c.Referencia + ')' : '') + '</option>';
   }).join('');
 
   const overlay = document.createElement('div');
@@ -679,14 +651,14 @@ function abrirModalAlta(centroFijo, diaFijo, horaFijo) {
         '</select>' +
       '</div>' +
       '<div id="alta-cliente-nuevo-campos" hidden>' +
-        '<div class="field"><label>Nombre</label><input type="text" id="alta-nombre"></div>' +
-        '<div class="field"><label>Apellidos</label><input type="text" id="alta-apellidos"></div>' +
+        '<div class="field"><label>Nombre completo</label><input type="text" id="alta-nombre"></div>' +
+        '<div class="field"><label>Referencia (opcional)</label><input type="text" id="alta-referencia" placeholder="ej. SV L 17:30"></div>' +
         '<div class="field"><label>Teléfono</label><input type="text" id="alta-telefono"></div>' +
       '</div>' +
-      '<div class="field"><label>Centro</label><input type="text" id="alta-centro" value="' + centroFijo + '"></div>' +
-      '<div class="field"><label>Día (ej. Lunes)</label><input type="text" id="alta-dia" value="' + diaFijo + '"></div>' +
-      '<div class="field"><label>Hora (ej. 18:00)</label><input type="text" id="alta-hora" value="' + horaFijo + '"></div>' +
-      '<div class="field"><label>Precio mensual (€)</label><input type="number" id="alta-precio" step="0.5"></div>' +
+      '<div class="field"><label>Centro</label><input type="text" id="alta-centro" value="' + centroFijo + '" readonly></div>' +
+      '<div class="field"><label>Día (ej. Lunes)</label><input type="text" id="alta-dia"></div>' +
+      '<div class="field"><label>Hora (ej. 18:00)</label><input type="text" id="alta-hora"></div>' +
+      '<p class="alumno-meta">El importe se calcula solo según la tarifa de suscripción (cuántas clases/semana tenga en este centro).</p>' +
       '<div class="modal-actions">' +
         '<button class="btn btn-secondary" id="cancelar-alta">Cancelar</button>' +
         '<button class="btn btn-primary" id="confirmar-alta-btn">Guardar</button>' +
@@ -707,34 +679,31 @@ function abrirModalAlta(centroFijo, diaFijo, horaFijo) {
     const centro = document.getElementById('alta-centro').value.trim();
     const dia = document.getElementById('alta-dia').value.trim();
     const hora = document.getElementById('alta-hora').value.trim();
-    const precio = parseFloat(document.getElementById('alta-precio').value) || 0;
     if (!centro || !dia || !hora) {
-      mostrarToast('Rellena centro, día y hora');
+      mostrarToast('Rellena día y hora');
       return;
     }
     try {
       let idCliente = selectCliente.value;
       if (idCliente === OPCION_CLIENTE_NUEVO) {
         const nombre = document.getElementById('alta-nombre').value.trim();
-        const apellidos = document.getElementById('alta-apellidos').value.trim();
+        const referencia = document.getElementById('alta-referencia').value.trim();
         const telefono = document.getElementById('alta-telefono').value.trim();
         if (!nombre) {
           mostrarToast('Escribe el nombre del cliente nuevo');
           return;
         }
         if (!avisoTelefonoDuplicado(telefono)) return;
-        const nuevoCliente = await apiPost('addCliente', { nombre: nombre, apellidos: apellidos, telefono: telefono });
+        const nuevoCliente = await apiPost('addCliente', { nombre: nombre, referencia: referencia, telefono: telefono });
         idCliente = nuevoCliente.ID;
       }
       await apiPost('addInscripcion', {
-        idCliente: idCliente, centro: centro, dia: dia, hora: hora,
-        precioDefecto: precio, fechaAlta: hoyISO()
+        idCliente: idCliente, centro: centro, dia: dia, hora: hora, fechaAlta: hoyISO()
       });
       mostrarToast('Alumno/a dado de alta');
       overlay.remove();
       await Promise.all([cargarAlumnos(), cargarClientes()]);
-      if (state.screen === 'alumnos') await cargarPagosMes();
-      else render();
+      await cargarPagosMes();
     } catch (err) {
       mostrarToast('Error: ' + err.message);
     }
@@ -749,8 +718,8 @@ function abrirModalNuevoCliente() {
   overlay.innerHTML = '' +
     '<div class="modal-sheet">' +
       '<h2>Nuevo cliente</h2>' +
-      '<div class="field"><label>Nombre</label><input type="text" id="cli-nombre"></div>' +
-      '<div class="field"><label>Apellidos</label><input type="text" id="cli-apellidos"></div>' +
+      '<div class="field"><label>Nombre completo</label><input type="text" id="cli-nombre"></div>' +
+      '<div class="field"><label>Referencia (opcional)</label><input type="text" id="cli-referencia" placeholder="ej. SV L 17:30"></div>' +
       '<div class="field"><label>Teléfono</label><input type="text" id="cli-telefono"></div>' +
       '<div class="field"><label>Notas</label><input type="text" id="cli-notas"></div>' +
       '<div class="modal-actions">' +
@@ -763,7 +732,7 @@ function abrirModalNuevoCliente() {
   document.getElementById('cancelar-cliente').addEventListener('click', function () { overlay.remove(); });
   document.getElementById('confirmar-cliente-btn').addEventListener('click', async function () {
     const nombre = document.getElementById('cli-nombre').value.trim();
-    const apellidos = document.getElementById('cli-apellidos').value.trim();
+    const referencia = document.getElementById('cli-referencia').value.trim();
     const telefono = document.getElementById('cli-telefono').value.trim();
     const notas = document.getElementById('cli-notas').value.trim();
     if (!nombre) {
@@ -772,7 +741,7 @@ function abrirModalNuevoCliente() {
     }
     if (!avisoTelefonoDuplicado(telefono)) return;
     try {
-      await apiPost('addCliente', { nombre: nombre, apellidos: apellidos, telefono: telefono, notas: notas });
+      await apiPost('addCliente', { nombre: nombre, referencia: referencia, telefono: telefono, notas: notas });
       mostrarToast('Cliente creado');
       overlay.remove();
       await cargarClientes();
@@ -794,11 +763,11 @@ function abrirModalEditarCliente(id) {
   overlay.innerHTML = '' +
     '<div class="modal-sheet">' +
       '<h2>Editar cliente</h2>' +
-      '<div class="field"><label>Nombre</label><input type="text" id="cli-nombre" value="' + (cliente.Nombre || '') + '"></div>' +
-      '<div class="field"><label>Apellidos</label><input type="text" id="cli-apellidos" value="' + (cliente.Apellidos || '') + '"></div>' +
+      '<div class="field"><label>Nombre completo</label><input type="text" id="cli-nombre" value="' + (cliente.Nombre || '') + '"></div>' +
+      '<div class="field"><label>Referencia</label><input type="text" id="cli-referencia" value="' + (cliente.Referencia || '') + '" placeholder="ej. SV L 17:30"></div>' +
       '<div class="field"><label>Teléfono</label><input type="text" id="cli-telefono" value="' + (cliente.Telefono || '') + '"></div>' +
       '<div class="field"><label>Notas</label><input type="text" id="cli-notas" value="' + (cliente.Notas || '') + '"></div>' +
-      '<p class="alumno-meta">Si cambias el nombre/apellidos, las inscripciones ya creadas no se actualizan solas (Cobros/Asistencia seguirán mostrando el nombre con el que se dieron de alta).</p>' +
+      '<p class="alumno-meta">Si cambias el nombre, las inscripciones ya creadas no se actualizan solas (Cobros/Asistencia seguirán mostrando el nombre con el que se dieron de alta).</p>' +
       '<div class="modal-actions">' +
         '<button class="btn btn-secondary" id="cancelar-cliente">Cancelar</button>' +
         '<button class="btn btn-primary" id="confirmar-cliente-btn">Guardar cambios</button>' +
@@ -809,7 +778,7 @@ function abrirModalEditarCliente(id) {
   document.getElementById('cancelar-cliente').addEventListener('click', function () { overlay.remove(); });
   document.getElementById('confirmar-cliente-btn').addEventListener('click', async function () {
     const nombre = document.getElementById('cli-nombre').value.trim();
-    const apellidos = document.getElementById('cli-apellidos').value.trim();
+    const referencia = document.getElementById('cli-referencia').value.trim();
     const telefono = document.getElementById('cli-telefono').value.trim();
     const notas = document.getElementById('cli-notas').value.trim();
     if (!nombre) {
@@ -817,7 +786,7 @@ function abrirModalEditarCliente(id) {
       return;
     }
     try {
-      await apiPost('actualizarCliente', { id: id, nombre: nombre, apellidos: apellidos, telefono: telefono, notas: notas });
+      await apiPost('actualizarCliente', { id: id, nombre: nombre, referencia: referencia, telefono: telefono, notas: notas });
       mostrarToast('Cliente actualizado');
       overlay.remove();
       await cargarClientes();
@@ -828,37 +797,55 @@ function abrirModalEditarCliente(id) {
   });
 }
 
-// --- Modal: dar de baja a un cliente (puede tener varios grupos) ---
+// --- Modal: gestionar cliente (baja por grupo + tarifa especial por centro) ---
 
-function abrirModalBajaCliente(idCliente) {
+function abrirModalGestionarCliente(idCliente) {
   const cliente = state.clientes.find(function (c) { return String(c.ID) === String(idCliente); });
   if (!cliente) return;
-  const activas = inscripcionesDeCliente(idCliente).filter(function (i) { return i.Estado === 'activo'; });
-  if (activas.length === 0) {
-    mostrarToast('No tiene inscripciones activas');
+  const inscripciones = inscripcionesDeCliente(idCliente);
+  if (inscripciones.length === 0) {
+    mostrarToast('Todavía no tiene ninguna inscripción');
     return;
   }
+
+  const porCentro = {};
+  inscripciones.forEach(function (i) {
+    if (!porCentro[i.Centro]) porCentro[i.Centro] = [];
+    porCentro[i.Centro].push(i);
+  });
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = '' +
     '<div class="modal-sheet">' +
-      '<h2>Dar de baja a ' + cliente.Nombre + '</h2>' +
-      '<p>Elige qué grupo(s) dar de baja. Se conserva su ficha de cliente por si vuelve más adelante.</p>' +
-      activas.map(function (i) {
+      '<h2>Gestionar a ' + cliente.Nombre + '</h2>' +
+      Object.keys(porCentro).sort().map(function (centro) {
+        const grupo = porCentro[centro];
+        const activasCentro = grupo.filter(function (i) { return i.Estado === 'activo'; });
+        const especial = grupo.some(function (i) { return esVerdadero(i.TarifaEspecial); });
         return '' +
-          '<div class="card alumno-card pendiente">' +
-            '<div class="alumno-top"><span class="alumno-nombre">' + i.Centro + ' — ' + i.Dia + ' ' + i.Hora + '</span></div>' +
-            '<button class="btn btn-danger btn-block" data-baja-insc="' + i.ID + '">Dar de baja este grupo</button>' +
-          '</div>';
+          '<div class="section-title">' + centro + '</div>' +
+          '<label class="alumno-meta" style="display:flex;align-items:center;gap:6px;">' +
+            '<input type="checkbox" data-especial-centro="' + centro + '" ' + (especial ? 'checked' : '') + '> Tarifa especial en este centro' +
+          '</label>' +
+          (activasCentro.length === 0
+            ? '<p class="empty-state">Sin grupos activos en este centro.</p>'
+            : activasCentro.map(function (i) {
+                return '' +
+                  '<div class="card alumno-card pendiente">' +
+                    '<div class="alumno-top"><span class="alumno-nombre">' + i.Dia + ' ' + i.Hora + '</span></div>' +
+                    '<button class="btn btn-danger btn-block" data-baja-insc="' + i.ID + '">Dar de baja este grupo</button>' +
+                  '</div>';
+              }).join(''));
       }).join('') +
       '<div class="modal-actions">' +
-        '<button class="btn btn-secondary" id="cerrar-baja-cliente">Cerrar</button>' +
+        '<button class="btn btn-secondary" id="cerrar-gestionar-cliente">Cerrar</button>' +
       '</div>' +
     '</div>';
   document.body.appendChild(overlay);
 
-  document.getElementById('cerrar-baja-cliente').addEventListener('click', function () { overlay.remove(); });
+  document.getElementById('cerrar-gestionar-cliente').addEventListener('click', function () { overlay.remove(); });
+
   overlay.querySelectorAll('[data-baja-insc]').forEach(function (btn) {
     btn.addEventListener('click', async function () {
       try {
@@ -866,9 +853,23 @@ function abrirModalBajaCliente(idCliente) {
         mostrarToast('Dado de baja');
         overlay.remove();
         await cargarAlumnos();
-        render();
+        if (state.modulo === 'cobros') await cargarPagosMes();
+        else render();
       } catch (err) {
         mostrarToast('Error: ' + err.message);
+      }
+    });
+  });
+
+  overlay.querySelectorAll('[data-especial-centro]').forEach(function (chk) {
+    chk.addEventListener('change', async function () {
+      try {
+        await apiPost('setTarifaEspecial', { idCliente: idCliente, centro: chk.dataset.especialCentro, especial: chk.checked });
+        mostrarToast('Actualizado');
+        await cargarAlumnos();
+      } catch (err) {
+        mostrarToast('Error: ' + err.message);
+        chk.checked = !chk.checked;
       }
     });
   });
