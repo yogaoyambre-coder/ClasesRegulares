@@ -5,7 +5,7 @@
  * 1. Sustituye SS_ID por el ID de tu Google Sheet (está en la URL de la hoja).
  * 2. La hoja debe tener estas pestañas con estas cabeceras exactas en la fila 1:
  *
- *    "Clientes":      ID | Nombre | Referencia | Telefono | Notas
+ *    "Clientes":      ID | Nombre | Referencia | Telefono | Notas | Estado
  *    "Inscripciones": ID | ID_Cliente | Nombre | Centro | Dia | Hora | Estado | FechaAlta | FechaBaja | TarifaEspecial
  *    "Pagos":         ID | Mes | ID_Cliente | Nombre | Centro | ClasesSemana | Importe | Pagado | FechaPago | Notas
  *    "Asistencia":    ID | Fecha | ID_Alumno | Nombre | Centro | Dia | Hora | Tipo | Estado | Notas
@@ -24,6 +24,8 @@
  *   TarifaEspecial a Inscripciones (quita PrecioDefecto si existía), y
  *   reestructura Pagos de "una fila por clase" a "una fila por cliente y
  *   centro" según la tarifa de suscripción.
+ * - migrarEstadoClientes: añade la columna "Estado" a Clientes (activo por
+ *   defecto) para poder dar de baja a un cliente sin ninguna clase asociada.
  */
 
 const SS_ID = '1BAXS6x2qk6GPI5-kmN3LPqtdPntm2g0ex8qQt0IALeY';
@@ -114,7 +116,7 @@ function doGet(e) {
     let result;
     switch (action) {
       case 'ping':
-        result = { version: 'v10-fix-formato-pagos', ahora: new Date().toISOString() };
+        result = { version: 'v11-baja-cliente-anadir-clase', ahora: new Date().toISOString() };
         break;
       case 'getClientes':
         result = getClientes();
@@ -150,6 +152,12 @@ function doPost(e) {
         break;
       case 'actualizarCliente':
         result = actualizarCliente(body);
+        break;
+      case 'bajaCliente':
+        result = bajaCliente(body.id);
+        break;
+      case 'reactivarCliente':
+        result = reactivarCliente(body.id);
         break;
       case 'addInscripcion':
         result = addInscripcion(body);
@@ -190,6 +198,9 @@ function doPost(e) {
       case 'migrarASuscripciones':
         result = migrarASuscripciones();
         break;
+      case 'migrarEstadoClientes':
+        result = migrarEstadoClientes();
+        break;
       case 'repararFormatoPagos':
         result = repararFormatoPagos();
         break;
@@ -213,10 +224,47 @@ function addCliente(body) {
     Nombre: body.nombre,
     Referencia: body.referencia || '',
     Telefono: body.telefono || '',
-    Notas: body.notas || ''
+    Notas: body.notas || '',
+    Estado: 'activo'
   };
   appendRow_(sheet, nuevo);
   return nuevo;
+}
+
+// Baja/reactivación a nivel de cliente — solo tiene sentido usarla cuando el
+// cliente no tiene ninguna inscripción (si tiene, se da de baja cada clase
+// por separado con bajaInscripcion). Sirve para poder ocultarlo de la lista
+// por defecto y conservar su ficha por si vuelve.
+function bajaCliente(id) {
+  const sheet = getSheet_(SHEET_CLIENTES);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const idxId = headers.indexOf('ID');
+  const idxEstado = headers.indexOf('Estado');
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idxId]) === String(id)) {
+      sheet.getRange(i + 1, idxEstado + 1).setValue('baja');
+      return { updated: true };
+    }
+  }
+  throw new Error('Cliente no encontrado');
+}
+
+function reactivarCliente(id) {
+  const sheet = getSheet_(SHEET_CLIENTES);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const idxId = headers.indexOf('ID');
+  const idxEstado = headers.indexOf('Estado');
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idxId]) === String(id)) {
+      sheet.getRange(i + 1, idxEstado + 1).setValue('activo');
+      return { updated: true };
+    }
+  }
+  throw new Error('Cliente no encontrado');
 }
 
 function actualizarCliente(body) {
@@ -249,6 +297,9 @@ function addInscripcion(body) {
   const clientes = getClientes();
   const cliente = clientes.find(function (c) { return String(c.ID) === String(body.idCliente); });
   if (!cliente) throw new Error('Cliente no encontrado');
+  // Si el cliente estaba de baja a nivel de ficha (sin ninguna clase) y ahora
+  // se le añade una, reactivarlo: no tendría sentido seguir marcado de baja.
+  if (cliente.Estado === 'baja') reactivarCliente(cliente.ID);
 
   const sheet = getSheet_(SHEET_INSCRIPCIONES);
   const nueva = {
@@ -730,6 +781,29 @@ function migrarASuscripciones() {
   }
 
   return resultado;
+}
+
+/**
+ * Añade la columna "Estado" a Clientes (activo por defecto) si todavía no
+ * existe. Necesaria para poder dar de baja a un cliente que no tiene ninguna
+ * inscripción asociada (con inscripciones, la baja ya se gestiona por
+ * clase con bajaInscripcion).
+ */
+function migrarEstadoClientes() {
+  const sheet = getSheet_(SHEET_CLIENTES);
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  if (headers.indexOf('Estado') !== -1) {
+    return { migrado: false, motivo: 'Ya existe la columna "Estado"' };
+  }
+  const columna = headers.length + 1;
+  sheet.getRange(1, columna).setValue('Estado');
+  const filas = sheet.getLastRow() - 1;
+  if (filas > 0) {
+    const valores = [];
+    for (let i = 0; i < filas; i++) valores.push(['activo']);
+    sheet.getRange(2, columna, filas, 1).setValues(valores);
+  }
+  return { migrado: true, filas: filas };
 }
 
 // Reparación puntual de formato si "migrarASuscripciones" ya se ejecutó

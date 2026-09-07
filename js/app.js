@@ -23,7 +23,8 @@ const state = {
   cargando: false,
   filtroCentro: '', // filtro del módulo Clientes
   filtroHorario: null, // { dia, hora } | null
-  mostrarBajas: false
+  mostrarBajas: false,
+  filtroHorarioCobros: null // { dia, hora } | null, filtro del módulo Cobros
 };
 
 function mesActual() {
@@ -129,9 +130,20 @@ function inscripcionesDeCliente(idCliente) {
   return state.alumnos.filter(function (a) { return String(a.ID_Cliente) === String(idCliente); });
 }
 
+function clientePorId(id) {
+  return state.clientes.find(function (c) { return String(c.ID) === String(id); });
+}
+
 function pagosDeCentro() {
   return state.pagos
     .filter(function (p) { return p.Centro === state.centro; })
+    .filter(function (p) {
+      if (!state.filtroHorarioCobros) return true;
+      return inscripcionesDeCliente(p.ID_Cliente).some(function (i) {
+        return i.Centro === state.centro && i.Estado === 'activo' &&
+          i.Dia === state.filtroHorarioCobros.dia && i.Hora === state.filtroHorarioCobros.hora;
+      });
+    })
     .sort(function (a, b) { return a.Nombre.localeCompare(b.Nombre); });
 }
 
@@ -219,6 +231,21 @@ function render() {
     });
   }
 
+  if (state.modulo === 'cobros' && state.screen === 'pagos') {
+    const selHorarioCobros = document.getElementById('filtro-horario-cobros');
+    if (selHorarioCobros) {
+      selHorarioCobros.addEventListener('change', function (e) {
+        if (!e.target.value) {
+          state.filtroHorarioCobros = null;
+        } else {
+          const partes = e.target.value.split('|');
+          state.filtroHorarioCobros = { dia: partes[0], hora: partes[1] };
+        }
+        render();
+      });
+    }
+  }
+
   bindScreenEvents();
 }
 
@@ -259,11 +286,13 @@ function avisoTelefonoDuplicado(telefono, excluirId) {
   return confirm('Ya existe un cliente con este teléfono: ' + existente.Nombre + '.\n\n¿Crear de todas formas? (puede ser normal si comparten teléfono, ej. familiares)');
 }
 
-// Solo "de baja del todo": tiene inscripciones, pero ninguna activa. Un
-// cliente sin ninguna inscripción todavía (recién creado) no cuenta como baja.
+// "De baja del todo": o bien tiene inscripciones pero ninguna activa, o bien
+// no tiene ninguna y se marcó de baja manualmente a nivel de ficha. Un
+// cliente recién creado sin inscripciones y sin marcar no cuenta como baja.
 function clienteDeBajaDelTodo(cliente) {
   const inscs = inscripcionesDeCliente(cliente.ID);
-  return inscs.length > 0 && !inscs.some(function (i) { return i.Estado === 'activo'; });
+  if (inscs.length === 0) return cliente.Estado === 'baja';
+  return !inscs.some(function (i) { return i.Estado === 'activo'; });
 }
 
 function clienteCoincideFiltro(cliente) {
@@ -312,22 +341,18 @@ function renderClientes() {
 }
 
 function renderClienteCard(c) {
-  const inscs = inscripcionesDeCliente(c.ID);
-  const activas = inscs.filter(function (i) { return i.Estado === 'activo'; });
-  const sinInscripcionesActivas = activas.length === 0 && inscs.length > 0;
+  const deBaja = clienteDeBajaDelTodo(c);
   return '' +
     '<div class="card">' +
       '<div class="alumno-top">' +
         '<span class="alumno-nombre">' + c.Nombre + (c.Referencia ? ' — ' + c.Referencia : '') +
-          (sinInscripcionesActivas ? ' <span class="alumno-meta">(de baja)</span>' : '') +
+          (deBaja ? ' <span class="alumno-meta">(de baja)</span>' : '') +
         '</span>' +
         '<button class="back-link" data-accion="editar-cliente" data-id="' + c.ID + '">Editar</button>' +
       '</div>' +
       (c.Telefono ? '<div class="alumno-meta">' + c.Telefono + '</div>' : '') +
       (c.Notas ? '<div class="alumno-meta">' + c.Notas + '</div>' : '') +
-      (inscs.length > 0
-        ? '<button class="btn-danger-link" data-accion="gestionar-cliente" data-id="' + c.ID + '">Gestionar</button>'
-        : '') +
+      '<button class="btn-danger-link" data-accion="gestionar-cliente" data-id="' + c.ID + '">Gestionar</button>' +
     '</div>';
 }
 
@@ -364,11 +389,21 @@ function clienteDeBajaEnCentro(idCliente, centro) {
 }
 
 function renderPagosCentro() {
+  const horarios = horariosDeCentro(state.centro);
   const pagos = pagosDeCentro();
   const pagados = pagos.filter(esPagado).length;
   return '' +
     '<div class="top-bar"><button class="back-link" data-accion="volver-centro">&larr; Centros</button></div>' +
     '<div class="section-title">' + state.centro + '</div>' +
+    (horarios.length === 0 ? '' :
+      '<select class="select-estado" id="filtro-horario-cobros">' +
+        '<option value="">Todas las clases</option>' +
+        horarios.map(function (h) {
+          const valor = h.dia + '|' + h.hora;
+          const sel = state.filtroHorarioCobros && state.filtroHorarioCobros.dia === h.dia && state.filtroHorarioCobros.hora === h.hora;
+          return '<option value="' + valor + '"' + (sel ? ' selected' : '') + '>' + h.dia + ' ' + h.hora + '</option>';
+        }).join('') +
+      '</select>') +
     '<div class="resumen-mes">' + pagados + ' de ' + pagos.length + ' pagados este mes</div>' +
     (pagos.length === 0
       ? '<p class="empty-state">No hay clientes en este centro para este mes.</p>'
@@ -389,12 +424,15 @@ function renderPagoCard(p) {
     : (clases + (clases === 1 ? ' clase/semana' : ' clases/semana'));
   const clave = p.ID_Cliente + '|' + p.Centro;
   const deBaja = clienteDeBajaEnCentro(p.ID_Cliente, p.Centro);
+  const cliente = clientePorId(p.ID_Cliente);
+  const referencia = cliente && cliente.Referencia ? cliente.Referencia : '';
   return '' +
     '<div class="card alumno-card ' + (pagado ? 'pagado' : 'pendiente') + '">' +
       '<div class="alumno-top">' +
         '<span class="alumno-nombre">' + p.Nombre + (deBaja ? ' <span class="alumno-meta">(de baja)</span>' : '') + '</span>' +
         '<button class="back-link" data-accion="gestionar-cliente" data-id="' + p.ID_Cliente + '">Gestionar</button>' +
       '</div>' +
+      (referencia ? '<div class="alumno-meta">' + referencia + '</div>' : '') +
       '<div class="alumno-meta">' + etiqueta + '</div>' +
       '<div class="alumno-controls">' +
         '<input type="checkbox" class="checkbox-pagado" data-accion="toggle-pagado" data-key="' + clave + '" ' + (pagado ? 'checked' : '') + '>' +
@@ -499,6 +537,7 @@ function bindScreenEvents() {
         state.centro = el.dataset.centro;
         if (state.modulo === 'cobros') {
           state.screen = 'pagos';
+          state.filtroHorarioCobros = null;
           await cargarPagosMes();
         } else {
           state.screen = 'horario';
@@ -803,10 +842,6 @@ function abrirModalGestionarCliente(idCliente) {
   const cliente = state.clientes.find(function (c) { return String(c.ID) === String(idCliente); });
   if (!cliente) return;
   const inscripciones = inscripcionesDeCliente(idCliente);
-  if (inscripciones.length === 0) {
-    mostrarToast('Todavía no tiene ninguna inscripción');
-    return;
-  }
 
   const porCentro = {};
   inscripciones.forEach(function (i) {
@@ -814,12 +849,13 @@ function abrirModalGestionarCliente(idCliente) {
     porCentro[i.Centro].push(i);
   });
 
-  const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
-  overlay.innerHTML = '' +
-    '<div class="modal-sheet">' +
-      '<h2>Gestionar a ' + cliente.Nombre + '</h2>' +
-      Object.keys(porCentro).sort().map(function (centro) {
+  const sinClases = Object.keys(porCentro).length === 0;
+  const contenidoCentros = sinClases
+    ? '<p class="empty-state">Todavía no tiene ninguna clase asociada.</p>' +
+      (cliente.Estado === 'baja'
+        ? '<button class="btn btn-primary btn-block" id="reactivar-cliente-btn">Reactivar cliente</button>'
+        : '<button class="btn btn-danger btn-block" id="baja-cliente-btn">Dar de baja a este cliente</button>')
+    : Object.keys(porCentro).sort().map(function (centro) {
         const grupo = porCentro[centro];
         const activasCentro = grupo.filter(function (i) { return i.Estado === 'activo'; });
         const especial = grupo.some(function (i) { return esVerdadero(i.TarifaEspecial); });
@@ -837,7 +873,15 @@ function abrirModalGestionarCliente(idCliente) {
                     '<button class="btn btn-danger btn-block" data-baja-insc="' + i.ID + '">Dar de baja este grupo</button>' +
                   '</div>';
               }).join(''));
-      }).join('') +
+      }).join('');
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = '' +
+    '<div class="modal-sheet">' +
+      '<h2>Gestionar a ' + cliente.Nombre + '</h2>' +
+      contenidoCentros +
+      '<button class="btn btn-secondary btn-block" id="abrir-anadir-clase-btn">+ Añadir clase</button>' +
       '<div class="modal-actions">' +
         '<button class="btn btn-secondary" id="cerrar-gestionar-cliente">Cerrar</button>' +
       '</div>' +
@@ -845,6 +889,41 @@ function abrirModalGestionarCliente(idCliente) {
   document.body.appendChild(overlay);
 
   document.getElementById('cerrar-gestionar-cliente').addEventListener('click', function () { overlay.remove(); });
+
+  document.getElementById('abrir-anadir-clase-btn').addEventListener('click', function () {
+    overlay.remove();
+    abrirModalAnadirClase(idCliente);
+  });
+
+  const btnBajaCliente = document.getElementById('baja-cliente-btn');
+  if (btnBajaCliente) {
+    btnBajaCliente.addEventListener('click', async function () {
+      try {
+        await apiPost('bajaCliente', { id: idCliente });
+        mostrarToast('Cliente dado de baja');
+        overlay.remove();
+        await cargarClientes();
+        render();
+      } catch (err) {
+        mostrarToast('Error: ' + err.message);
+      }
+    });
+  }
+
+  const btnReactivarCliente = document.getElementById('reactivar-cliente-btn');
+  if (btnReactivarCliente) {
+    btnReactivarCliente.addEventListener('click', async function () {
+      try {
+        await apiPost('reactivarCliente', { id: idCliente });
+        mostrarToast('Cliente reactivado');
+        overlay.remove();
+        await cargarClientes();
+        render();
+      } catch (err) {
+        mostrarToast('Error: ' + err.message);
+      }
+    });
+  }
 
   overlay.querySelectorAll('[data-baja-insc]').forEach(function (btn) {
     btn.addEventListener('click', async function () {
@@ -872,6 +951,54 @@ function abrirModalGestionarCliente(idCliente) {
         chk.checked = !chk.checked;
       }
     });
+  });
+}
+
+// --- Modal: añadir clase a un cliente ya existente, desde su ficha ---
+
+function abrirModalAnadirClase(idCliente) {
+  const cliente = state.clientes.find(function (c) { return String(c.ID) === String(idCliente); });
+  if (!cliente) return;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = '' +
+    '<div class="modal-sheet">' +
+      '<h2>Añadir clase a ' + cliente.Nombre + '</h2>' +
+      '<div class="field"><label>Centro</label>' +
+        '<select id="clase-centro">' +
+          CENTROS.map(function (c) { return '<option value="' + c + '">' + c + '</option>'; }).join('') +
+        '</select>' +
+      '</div>' +
+      '<div class="field"><label>Día (ej. Lunes)</label><input type="text" id="clase-dia"></div>' +
+      '<div class="field"><label>Hora (ej. 18:00)</label><input type="text" id="clase-hora"></div>' +
+      '<p class="alumno-meta">El importe se calcula solo según cuántas clases/semana tenga en ese centro.</p>' +
+      '<div class="modal-actions">' +
+        '<button class="btn btn-secondary" id="cancelar-clase">Cancelar</button>' +
+        '<button class="btn btn-primary" id="confirmar-clase-btn">Guardar</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+
+  document.getElementById('cancelar-clase').addEventListener('click', function () { overlay.remove(); });
+  document.getElementById('confirmar-clase-btn').addEventListener('click', async function () {
+    const centro = document.getElementById('clase-centro').value;
+    const dia = document.getElementById('clase-dia').value.trim();
+    const hora = document.getElementById('clase-hora').value.trim();
+    if (!dia || !hora) {
+      mostrarToast('Rellena día y hora');
+      return;
+    }
+    try {
+      await apiPost('addInscripcion', { idCliente: idCliente, centro: centro, dia: dia, hora: hora, fechaAlta: hoyISO() });
+      mostrarToast('Clase añadida');
+      overlay.remove();
+      await Promise.all([cargarAlumnos(), cargarClientes()]);
+      if (state.modulo === 'cobros' && state.screen === 'pagos') await cargarPagosMes();
+      else render();
+    } catch (err) {
+      mostrarToast('Error: ' + err.message);
+    }
   });
 }
 
