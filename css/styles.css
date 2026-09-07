@@ -221,6 +221,14 @@ input[type="month"] {
   cursor: pointer;
 }
 
+.whatsapp-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--primary);
+  text-decoration: none;
+}
+
 .empty-state {
   color: var(--muted);
   text-align: center;

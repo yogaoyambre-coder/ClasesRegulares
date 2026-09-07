@@ -8,10 +8,13 @@
  *    "Clientes":      ID | Nombre | Referencia | Telefono | Notas | Estado
  *    "Inscripciones": ID | ID_Cliente | Nombre | Centro | Dia | Hora | Estado | FechaAlta | FechaBaja | TarifaEspecial
  *    "Pagos":         ID | Mes | ID_Cliente | Nombre | Centro | ClasesSemana | Importe | Pagado | FechaPago | Notas
- *    "Asistencia":    ID | Fecha | ID_Alumno | Nombre | Centro | Dia | Hora | Tipo | Estado | Notas
+ *    "Asistencia":    ID | Fecha | ID_Alumno | ID_Cliente | Nombre | Centro | Dia | Hora | Tipo | Estado | Notas
  *
  *    (Asistencia sigue usando "ID_Alumno" como nombre de columna, pero
- *    apunta al ID de la INSCRIPCIÓN.)
+ *    apunta al ID de la INSCRIPCIÓN. "ID_Cliente" enlaza además con el
+ *    cliente real — para "regular" es el de su inscripción; para una
+ *    recuperación con cliente ya existente, el del cliente elegido; para
+ *    clase suelta/prueba sin cliente todavía, queda vacío.)
  *
  * 3. Implementar > Nueva implementación > Aplicación web
  *    - Ejecutar como: Yo
@@ -26,6 +29,8 @@
  *   centro" según la tarifa de suscripción.
  * - migrarEstadoClientes: añade la columna "Estado" a Clientes (activo por
  *   defecto) para poder dar de baja a un cliente sin ninguna clase asociada.
+ * - migrarIdClienteAsistencia: añade "ID_Cliente" a Asistencia, rellenando
+ *   el de las filas "regular" existentes a partir de su inscripción.
  */
 
 const SS_ID = '1BAXS6x2qk6GPI5-kmN3LPqtdPntm2g0ex8qQt0IALeY';
@@ -116,7 +121,7 @@ function doGet(e) {
     let result;
     switch (action) {
       case 'ping':
-        result = { version: 'v11-baja-cliente-anadir-clase', ahora: new Date().toISOString() };
+        result = { version: 'v12-recuperacion-cliente-whatsapp', ahora: new Date().toISOString() };
         break;
       case 'getClientes':
         result = getClientes();
@@ -200,6 +205,9 @@ function doPost(e) {
         break;
       case 'migrarEstadoClientes':
         result = migrarEstadoClientes();
+        break;
+      case 'migrarIdClienteAsistencia':
+        result = migrarIdClienteAsistencia();
         break;
       case 'repararFormatoPagos':
         result = repararFormatoPagos();
@@ -542,6 +550,7 @@ function getAsistenciaFecha(fecha, centro, dia, hora) {
       ID: Utilities.getUuid(),
       Fecha: fecha,
       ID_Alumno: a.ID,
+      ID_Cliente: a.ID_Cliente,
       Nombre: a.Nombre,
       Centro: centro,
       Dia: dia,
@@ -589,14 +598,25 @@ function setAsistencia(body) {
   throw new Error('No se encontró ese registro de asistencia');
 }
 
-// Persona puntual (recuperación / clase suelta / prueba) añadida a una sesión.
+// Persona puntual añadida a una sesión: recuperación (cliente ya existente,
+// para que le compute la sesión — body.idCliente), o clase suelta/prueba
+// (todavía no es cliente — body.nombre en texto libre).
 function addAsistente(body) {
   const sheet = getSheet_(SHEET_ASISTENCIA);
+  let nombre = body.nombre || '';
+  let idCliente = '';
+  if (body.idCliente) {
+    const cliente = getClientes().find(function (c) { return String(c.ID) === String(body.idCliente); });
+    if (!cliente) throw new Error('Cliente no encontrado');
+    idCliente = cliente.ID;
+    nombre = cliente.Nombre;
+  }
   const nueva = {
     ID: Utilities.getUuid(),
     Fecha: body.fecha,
     ID_Alumno: '',
-    Nombre: body.nombre,
+    ID_Cliente: idCliente,
+    Nombre: nombre,
     Centro: body.centro,
     Dia: body.dia,
     Hora: body.hora,
@@ -804,6 +824,35 @@ function migrarEstadoClientes() {
     sheet.getRange(2, columna, filas, 1).setValues(valores);
   }
   return { migrado: true, filas: filas };
+}
+
+/**
+ * Añade "ID_Cliente" a Asistencia si todavía no existe, rellenándolo para
+ * las filas "regular" ya existentes a partir del cliente de su inscripción
+ * (las de recuperación/suelta/prueba ya creadas quedan sin cliente, porque
+ * antes no se guardaba esa relación).
+ */
+function migrarIdClienteAsistencia() {
+  const sheet = getSheet_(SHEET_ASISTENCIA);
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  if (headers.indexOf('ID_Cliente') !== -1) {
+    return { migrado: false, motivo: 'Ya existe la columna "ID_Cliente"' };
+  }
+
+  const inscPorId = {};
+  getInscripciones().forEach(function (i) { inscPorId[i.ID] = i; });
+
+  const filas = sheetToObjects_(sheet);
+  const columna = headers.length + 1;
+  sheet.getRange(1, columna).setValue('ID_Cliente');
+  if (filas.length > 0) {
+    const valores = filas.map(function (f) {
+      const insc = inscPorId[f.ID_Alumno];
+      return [insc ? insc.ID_Cliente : ''];
+    });
+    sheet.getRange(2, columna, valores.length, 1).setValues(valores);
+  }
+  return { migrado: true, filas: filas.length };
 }
 
 // Reparación puntual de formato si "migrarASuscripciones" ya se ejecutó

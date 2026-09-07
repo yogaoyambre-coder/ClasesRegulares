@@ -350,10 +350,24 @@ function renderClienteCard(c) {
         '</span>' +
         '<button class="back-link" data-accion="editar-cliente" data-id="' + c.ID + '">Editar</button>' +
       '</div>' +
-      (c.Telefono ? '<div class="alumno-meta">' + c.Telefono + '</div>' : '') +
+      (c.Telefono ? '<div class="alumno-meta">' + renderTelefonoWhatsapp(c.Telefono) + '</div>' : '') +
       (c.Notas ? '<div class="alumno-meta">' + c.Notas + '</div>' : '') +
       '<button class="btn-danger-link" data-accion="gestionar-cliente" data-id="' + c.ID + '">Gestionar</button>' +
     '</div>';
+}
+
+// Enlace wa.me a partir del teléfono guardado. Asume España (prefijo 34) si
+// el número tiene 9 dígitos sin prefijo — ajusta si algún cliente es de fuera.
+function telefonoParaWhatsapp_(telefono) {
+  let digitos = String(telefono).replace(/\D/g, '');
+  if (digitos.length === 9) digitos = '34' + digitos;
+  return digitos;
+}
+
+function renderTelefonoWhatsapp(telefono) {
+  const digitos = telefonoParaWhatsapp_(telefono);
+  if (!digitos) return telefono;
+  return '<a class="whatsapp-link" href="https://wa.me/' + digitos + '" target="_blank" rel="noopener">💬 ' + telefono + '</a>';
 }
 
 function renderCentros() {
@@ -1004,19 +1018,41 @@ function abrirModalAnadirClase(idCliente) {
 
 // --- Modal: añadir recuperación / suelta / prueba ---
 
+// Clientes con alguna inscripción activa en un centro (para elegir a quién
+// se le computa una recuperación, venga de la clase que venga en ese centro).
+function clientesDeCentro(centro) {
+  return state.clientes
+    .filter(function (c) {
+      return inscripcionesDeCliente(c.ID).some(function (i) { return i.Centro === centro && i.Estado === 'activo'; });
+    })
+    .sort(function (a, b) { return a.Nombre.localeCompare(b.Nombre); });
+}
+
 function abrirModalAsistente() {
+  const clientesCentro = clientesDeCentro(state.centro);
+  const opcionesCliente = clientesCentro.map(function (c) {
+    return '<option value="' + c.ID + '">' + c.Nombre + (c.Referencia ? ' (' + c.Referencia + ')' : '') + '</option>';
+  }).join('');
+
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = '' +
     '<div class="modal-sheet">' +
       '<h2>Añadir a esta sesión</h2>' +
-      '<div class="field"><label>Nombre</label><input type="text" id="asis-nombre"></div>' +
       '<div class="field"><label>Tipo</label>' +
         '<select id="asis-tipo">' +
           '<option value="recuperacion">Recuperación</option>' +
           '<option value="suelta">Clase suelta</option>' +
           '<option value="prueba">Clase de prueba</option>' +
         '</select>' +
+      '</div>' +
+      '<div class="field" id="asis-campo-cliente">' +
+        '<label>Cliente</label>' +
+        '<select id="asis-cliente">' + opcionesCliente + '</select>' +
+        (clientesCentro.length === 0 ? '<p class="alumno-meta">No hay clientes activos en este centro todavía.</p>' : '') +
+      '</div>' +
+      '<div class="field" id="asis-campo-nombre" hidden>' +
+        '<label>Nombre</label><input type="text" id="asis-nombre">' +
       '</div>' +
       '<div class="modal-actions">' +
         '<button class="btn btn-secondary" id="cancelar-asis">Cancelar</button>' +
@@ -1025,19 +1061,40 @@ function abrirModalAsistente() {
     '</div>';
   document.body.appendChild(overlay);
 
+  const selectTipo = document.getElementById('asis-tipo');
+  const campoCliente = document.getElementById('asis-campo-cliente');
+  const campoNombre = document.getElementById('asis-campo-nombre');
+  function actualizarVisibilidadTipo() {
+    const esRecuperacion = selectTipo.value === 'recuperacion';
+    campoCliente.hidden = !esRecuperacion;
+    campoNombre.hidden = esRecuperacion;
+  }
+  actualizarVisibilidadTipo();
+  selectTipo.addEventListener('change', actualizarVisibilidadTipo);
+
   document.getElementById('cancelar-asis').addEventListener('click', function () { overlay.remove(); });
   document.getElementById('confirmar-asis-btn').addEventListener('click', async function () {
-    const nombre = document.getElementById('asis-nombre').value.trim();
-    const tipo = document.getElementById('asis-tipo').value;
-    if (!nombre) {
-      mostrarToast('Escribe un nombre');
-      return;
+    const tipo = selectTipo.value;
+    const payload = {
+      fecha: state.sesionFecha, centro: state.centro, dia: state.horario.dia, hora: state.horario.hora, tipo: tipo
+    };
+    if (tipo === 'recuperacion') {
+      const idCliente = document.getElementById('asis-cliente').value;
+      if (!idCliente) {
+        mostrarToast('Elige un cliente');
+        return;
+      }
+      payload.idCliente = idCliente;
+    } else {
+      const nombre = document.getElementById('asis-nombre').value.trim();
+      if (!nombre) {
+        mostrarToast('Escribe un nombre');
+        return;
+      }
+      payload.nombre = nombre;
     }
     try {
-      await apiPost('addAsistente', {
-        fecha: state.sesionFecha, centro: state.centro, dia: state.horario.dia, hora: state.horario.hora,
-        nombre: nombre, tipo: tipo
-      });
+      await apiPost('addAsistente', payload);
       mostrarToast('Añadido/a');
       overlay.remove();
       await cargarAsistenciaFecha(state.sesionFecha);
