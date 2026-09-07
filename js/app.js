@@ -230,13 +230,19 @@ function inscripcionesDeCliente(idCliente) {
   return state.alumnos.filter(function (a) { return String(a.ID_Cliente) === String(idCliente); });
 }
 
-// Compara solo dígitos para no fallar por espacios/guiones/"+34" escritos distinto.
+// Compara solo los últimos 9 dígitos (formato móvil español) para que no
+// falle por espacios/guiones, o por escribir el "+34" en una y en otra no.
+function ultimosDigitos_(telefono) {
+  const soloDigitos = String(telefono).replace(/\D/g, '');
+  return soloDigitos.slice(-9);
+}
+
 function buscarClientePorTelefono(telefono, excluirId) {
-  const limpio = String(telefono).replace(/\D/g, '');
+  const limpio = ultimosDigitos_(telefono);
   if (!limpio) return null;
   return state.clientes.find(function (c) {
     if (excluirId && String(c.ID) === String(excluirId)) return false;
-    return c.Telefono && String(c.Telefono).replace(/\D/g, '') === limpio;
+    return c.Telefono && ultimosDigitos_(c.Telefono) === limpio;
   });
 }
 
