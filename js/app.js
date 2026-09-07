@@ -9,7 +9,7 @@ const ESTADOS_ASISTENCIA = [
 ];
 
 const state = {
-  modulo: 'cobros', // 'cobros' | 'asistencia' | 'clientes'
+  modulo: 'cobros', // 'cobros' | 'asistencia' | 'clientes' | 'consultas'
   mes: mesActual(),
   screen: 'centro', // 'centro' | 'pagos' (cobros) | 'horario' | 'sesiones' | 'sesion' (asistencia)
   centro: null,
@@ -24,11 +24,22 @@ const state = {
   filtroCentro: '', // filtro del módulo Clientes
   filtroHorario: null, // { dia, hora } | null
   mostrarBajas: false,
-  filtroHorarioCobros: null // { dia, hora } | null, filtro del módulo Cobros
+  filtroHorarioCobros: null, // { dia, hora } | null, filtro del módulo Cobros
+  consultaCliente: null, // ID del cliente elegido en el módulo Consultas
+  consultaRango: 'actual', // 'todas' | 'personalizada' | 'actual' | 'siguiente'
+  consultaDesde: '',
+  consultaHasta: '',
+  sesionesCliente: []
 };
 
 function mesActual() {
   const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+
+function sumarMeses(mes, n) {
+  const partes = mes.split('-').map(Number);
+  const d = new Date(partes[0], partes[1] - 1 + n, 1);
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
 }
 
@@ -179,16 +190,17 @@ function fechasParaMostrar() {
   });
 }
 
-const TITULOS_MODULO = { cobros: 'Cobros', asistencia: 'Asistencia', clientes: 'Clientes' };
+const TITULOS_MODULO = { cobros: 'Cobros', asistencia: 'Asistencia', clientes: 'Clientes', consultas: 'Consultas' };
 
 function render() {
-  const mostrarMes = state.modulo !== 'clientes';
+  const mostrarMes = state.modulo === 'cobros' || state.modulo === 'asistencia';
   app.innerHTML = '' +
     '<header class="app-header"><h1>' + TITULOS_MODULO[state.modulo] + '</h1></header>' +
     '<div class="pill-row">' +
       '<button class="pill ' + (state.modulo === 'cobros' ? 'active' : '') + '" data-accion="cambiar-modulo" data-modulo="cobros">Cobros</button>' +
       '<button class="pill ' + (state.modulo === 'asistencia' ? 'active' : '') + '" data-accion="cambiar-modulo" data-modulo="asistencia">Asistencia</button>' +
       '<button class="pill ' + (state.modulo === 'clientes' ? 'active' : '') + '" data-accion="cambiar-modulo" data-modulo="clientes">Clientes</button>' +
+      '<button class="pill ' + (state.modulo === 'consultas' ? 'active' : '') + '" data-accion="cambiar-modulo" data-modulo="consultas">Consultas</button>' +
     '</div>' +
     (mostrarMes ? '<input type="month" id="mes-input" value="' + state.mes + '">' : '') +
     renderScreen();
@@ -196,6 +208,9 @@ function render() {
   if (mostrarMes) {
     document.getElementById('mes-input').addEventListener('change', async function (e) {
       state.mes = e.target.value;
+      if (state.mes > sumarMeses(mesActual(), 1)) {
+        mostrarToast('Los horarios solo están confirmados hasta el mes que viene — más adelante pueden cambiar.');
+      }
       if (state.modulo === 'cobros' && state.screen !== 'centro') {
         await cargarPagosMes();
       } else if (state.modulo === 'asistencia' && (state.screen === 'sesiones' || state.screen === 'sesion')) {
@@ -246,6 +261,18 @@ function render() {
     }
   }
 
+  if (state.modulo === 'consultas') {
+    const selCliente = document.getElementById('consulta-cliente-select');
+    if (selCliente) {
+      selCliente.addEventListener('change', async function (e) {
+        state.consultaCliente = e.target.value || null;
+        state.consultaRango = 'actual';
+        if (state.consultaCliente) await cargarSesionesCliente();
+        else render();
+      });
+    }
+  }
+
   bindScreenEvents();
 }
 
@@ -254,6 +281,7 @@ function renderScreen() {
     return '<p class="empty-state">Cargando...</p>';
   }
   if (state.modulo === 'clientes') return renderClientes();
+  if (state.modulo === 'consultas') return renderConsultas();
   if (state.screen === 'centro') return renderCentros();
   if (state.modulo === 'cobros') return renderPagosCentro();
   if (state.screen === 'horario') return renderHorarios();
@@ -370,6 +398,100 @@ function renderTelefonoWhatsapp(telefono) {
   return '<a class="whatsapp-link" href="https://wa.me/' + digitos + '" target="_blank" rel="noopener">💬 ' + telefono + '</a>';
 }
 
+// --- Consultas: historial de sesiones de un cliente ---
+
+function primerDiaDeMes(mes) {
+  return mes + '-01';
+}
+
+function ultimoDiaDeMes(mes) {
+  const partes = mes.split('-').map(Number);
+  return formatoFechaLocal(new Date(partes[0], partes[1], 0));
+}
+
+function rangoConsultaFechas() {
+  if (state.consultaRango === 'actual') {
+    const mes = mesActual();
+    return { desde: primerDiaDeMes(mes), hasta: ultimoDiaDeMes(mes) };
+  }
+  if (state.consultaRango === 'siguiente') {
+    const mes = sumarMeses(mesActual(), 1);
+    return { desde: primerDiaDeMes(mes), hasta: ultimoDiaDeMes(mes) };
+  }
+  if (state.consultaRango === 'personalizada') {
+    return { desde: state.consultaDesde || '', hasta: state.consultaHasta || '' };
+  }
+  return { desde: '', hasta: '' }; // todas
+}
+
+async function cargarSesionesCliente() {
+  state.cargando = true;
+  render();
+  try {
+    const rango = rangoConsultaFechas();
+    const params = { idCliente: state.consultaCliente };
+    if (rango.desde) params.desde = rango.desde;
+    if (rango.hasta) params.hasta = rango.hasta;
+    state.sesionesCliente = await apiGet('getSesionesCliente', params);
+  } catch (err) {
+    mostrarToast('Error cargando sesiones: ' + err.message);
+  }
+  state.cargando = false;
+  render();
+}
+
+const ETIQUETAS_RANGO_CONSULTA = { todas: 'Todas', actual: 'Mes actual', siguiente: 'Mes siguiente', personalizada: 'Personalizada' };
+const ETIQUETAS_ESTADO_ASISTENCIA = { pendiente: 'Pendiente', asiste: 'Asiste', cancelada: 'Cancelada', no_show: 'No show' };
+
+function renderConsultas() {
+  if (!state.consultaCliente) {
+    const clientes = state.clientes.slice().sort(function (a, b) { return a.Nombre.localeCompare(b.Nombre); });
+    return '' +
+      '<div class="section-title">Consultar sesiones de un cliente</div>' +
+      '<select class="select-estado" id="consulta-cliente-select">' +
+        '<option value="">Elige un cliente…</option>' +
+        clientes.map(function (c) {
+          return '<option value="' + c.ID + '">' + c.Nombre + (c.Referencia ? ' (' + c.Referencia + ')' : '') + '</option>';
+        }).join('') +
+      '</select>';
+  }
+
+  const cliente = clientePorId(state.consultaCliente);
+  const hoy = hoyISO();
+  const pasadas = state.sesionesCliente.filter(function (f) { return f.Fecha < hoy; });
+  const futuras = state.sesionesCliente.filter(function (f) { return f.Fecha >= hoy; });
+
+  return '' +
+    '<div class="top-bar"><button class="back-link" data-accion="volver-consultas">&larr; Elegir otro cliente</button></div>' +
+    '<div class="section-title">' + (cliente ? cliente.Nombre : '') + '</div>' +
+    '<div class="pill-row">' +
+      Object.keys(ETIQUETAS_RANGO_CONSULTA).map(function (r) {
+        return '<button class="pill ' + (state.consultaRango === r ? 'active' : '') + '" data-accion="consulta-rango" data-rango="' + r + '">' +
+          ETIQUETAS_RANGO_CONSULTA[r] + '</button>';
+      }).join('') +
+    '</div>' +
+    (state.consultaRango === 'personalizada'
+      ? '<div class="field"><label>Desde</label><input type="date" id="consulta-desde" value="' + state.consultaDesde + '"></div>' +
+        '<div class="field"><label>Hasta</label><input type="date" id="consulta-hasta" value="' + state.consultaHasta + '"></div>' +
+        '<button class="btn btn-secondary btn-block" data-accion="consulta-buscar-personalizada">Buscar</button>'
+      : '') +
+    (state.sesionesCliente.length === 0
+      ? '<p class="empty-state">No hay sesiones registradas en este rango.</p>'
+      : '' +
+        (pasadas.length > 0 ? '<div class="section-title">Pasadas</div>' + pasadas.map(renderSesionClienteCard).join('') : '') +
+        (futuras.length > 0 ? '<div class="section-title">Futuras</div>' + futuras.map(renderSesionClienteCard).join('') : ''));
+}
+
+function renderSesionClienteCard(f) {
+  const etiquetaEstado = ETIQUETAS_ESTADO_ASISTENCIA[f.Estado] || f.Estado;
+  const tipoTag = f.Tipo !== 'regular' ? ' <span class="alumno-meta">(' + f.Tipo + ')</span>' : '';
+  return '' +
+    '<div class="card alumno-card ' + claseEstado(f.Estado) + '">' +
+      '<div class="alumno-top"><span class="alumno-nombre">' + formateaFechaCorta(f.Fecha) + tipoTag + '</span></div>' +
+      '<div class="alumno-meta">' + f.Centro + ' — ' + f.Dia + ' ' + f.Hora + ' · ' + etiquetaEstado + '</div>' +
+    '</div>';
+}
+
 function renderCentros() {
   return '' +
     '<div class="section-title">Centro</div>' +
@@ -483,7 +605,9 @@ function renderSesiones() {
 // --- Asistencia: detalle de una sesión concreta ---
 
 function renderSesion() {
-  const filas = state.asistencias.slice().sort(function (a, b) { return a.Nombre.localeCompare(b.Nombre); });
+  const filas = state.asistencias
+    .filter(function (f) { return f.Estado !== 'eliminado'; })
+    .sort(function (a, b) { return a.Nombre.localeCompare(b.Nombre); });
   return '' +
     '<div class="top-bar"><button class="back-link" data-accion="volver-sesiones">&larr; Sesiones</button></div>' +
     '<div class="section-title">' + state.centro + ' — ' + state.horario.dia + ' ' + state.horario.hora + '</div>' +
@@ -633,6 +757,24 @@ function bindScreenEvents() {
     } else if (accion === 'gestionar-cliente') {
       el.addEventListener('click', function () {
         abrirModalGestionarCliente(el.dataset.id);
+      });
+    } else if (accion === 'volver-consultas') {
+      el.addEventListener('click', function () {
+        state.consultaCliente = null;
+        state.sesionesCliente = [];
+        render();
+      });
+    } else if (accion === 'consulta-rango') {
+      el.addEventListener('click', async function () {
+        state.consultaRango = el.dataset.rango;
+        if (state.consultaRango === 'personalizada') render();
+        else await cargarSesionesCliente();
+      });
+    } else if (accion === 'consulta-buscar-personalizada') {
+      el.addEventListener('click', async function () {
+        state.consultaDesde = document.getElementById('consulta-desde').value;
+        state.consultaHasta = document.getElementById('consulta-hasta').value;
+        await cargarSesionesCliente();
       });
     }
   });

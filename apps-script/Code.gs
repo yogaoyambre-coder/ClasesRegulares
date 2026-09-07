@@ -121,7 +121,7 @@ function doGet(e) {
     let result;
     switch (action) {
       case 'ping':
-        result = { version: 'v12-recuperacion-cliente-whatsapp', ahora: new Date().toISOString() };
+        result = { version: 'v13-eliminar-blando-y-consultas', ahora: new Date().toISOString() };
         break;
       case 'getClientes':
         result = getClientes();
@@ -137,6 +137,9 @@ function doGet(e) {
         break;
       case 'getFechasSesion':
         result = getFechasSesionesGuardadas(e.parameter.centro, e.parameter.dia, e.parameter.hora, e.parameter.mes);
+        break;
+      case 'getSesionesCliente':
+        result = getSesionesCliente(e.parameter.idCliente, e.parameter.desde, e.parameter.hasta);
         break;
       default:
         throw new Error('Acción GET no reconocida: ' + action);
@@ -567,6 +570,23 @@ function getAsistenciaFecha(fecha, centro, dia, hora) {
 }
 
 /**
+ * Historial de sesiones de un cliente (para el módulo de consultas): todas
+ * sus filas de Asistencia (regular o puntual), opcionalmente acotadas por
+ * fecha, ordenadas cronológicamente. Excluye las marcadas "eliminado".
+ */
+function getSesionesCliente(idCliente, desde, hasta) {
+  const filas = sheetToObjects_(getSheet_(SHEET_ASISTENCIA)).filter(function (f) {
+    if (String(f.ID_Cliente) !== String(idCliente)) return false;
+    if (f.Estado === 'eliminado') return false;
+    if (desde && f.Fecha < desde) return false;
+    if (hasta && f.Fecha > hasta) return false;
+    return true;
+  });
+  filas.sort(function (a, b) { return a.Fecha.localeCompare(b.Fecha); });
+  return filas;
+}
+
+/**
  * Fechas (YYYY-MM-DD) de un mes en las que ya existe algún registro de
  * asistencia para ese centro/horario — incluye tanto sesiones regulares ya
  * abiertas como sesiones extra (clases movidas) añadidas a mano.
@@ -628,17 +648,23 @@ function addAsistente(body) {
   return nueva;
 }
 
-// Borra por completo un registro de asistencia (para quitar pruebas o
-// duplicados; a diferencia de cambiar el Estado, esto no deja rastro).
+// "Elimina" un registro de asistencia. OJO: no borra la fila de verdad — si
+// es "regular" y el cliente sigue activo en esa clase, borrar la fila haría
+// que getAsistenciaFecha la regenerase sola en el siguiente refresco (bug
+// real detectado: al cancelar una clase entera y luego "eliminar" a alguien
+// que seguía activo, su fila volvía a aparecer como "pendiente"). En su
+// lugar se marca con Estado "eliminado", que las vistas ocultan y que
+// cuenta como "ya existe fila" para no regenerarla.
 function eliminarAsistencia(id) {
   const sheet = getSheet_(SHEET_ASISTENCIA);
   const data = sheet.getDataRange().getValues();
   const headers = data[0];
   const idxId = headers.indexOf('ID');
+  const idxEstado = headers.indexOf('Estado');
 
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][idxId]) === String(id)) {
-      sheet.deleteRow(i + 1);
+      sheet.getRange(i + 1, idxEstado + 1).setValue('eliminado');
       return { deleted: true };
     }
   }
