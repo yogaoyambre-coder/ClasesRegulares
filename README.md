@@ -40,8 +40,10 @@ Crea una hoja de cálculo nueva en Google Sheets con cuatro pestañas:
 
 **Pestaña "Pagos"** (fila 1 = cabeceras exactas) — una fila por **cliente y centro** (una cuota de suscripción, no una clase suelta):
 
-| ID | Mes | ID_Cliente | Nombre | Centro | ClasesSemana | Importe | Pagado | FechaPago | Notas |
-|----|-----|-----------|--------|--------|--------------|---------|--------|-----------|-------|
+| ID | Mes | ID_Cliente | Nombre | Centro | ClasesSemana | Importe | Pagado | FechaPago | MetodoPago | Notas |
+|----|-----|-----------|--------|--------|--------------|---------|--------|-----------|------------|-------|
+
+`MetodoPago` es libre: `efectivo`, `bizum` u `otro` desde el selector de la app.
 
 **Pestaña "Asistencia"** (fila 1 = cabeceras exactas):
 
@@ -67,6 +69,7 @@ Todo se puede rellenar desde la propia app (Configuración → Clientes → Cobr
 - **`migrarAClientes`**: si tu Sheet viene de antes de que existiera el módulo de Clientes (una sola pestaña "Alumnos"), haz un POST a `TU_URL/exec` con `{"action":"migrarAClientes"}`. Crea "Clientes" a partir de los nombres únicos que había en "Alumnos" y renombra "Alumnos" a "Inscripciones". Si no encuentra la hoja "Alumnos" no hace nada.
 - **`migrarASuscripciones`**: si vienes de antes del modelo de tarifas por suscripción, haz un POST con `{"action":"migrarASuscripciones"}`. Renombra `Apellidos`→`Referencia` en Clientes, añade `TarifaEspecial` a Inscripciones (quitando `PrecioDefecto`, que ya no se usa), y reestructura Pagos de "una fila por clase" a "una fila por cliente+centro" recalculando el importe según la tabla de tarifas. Cada paso comprueba si ya se aplicó, así que es segura de ejecutar más de una vez.
 - **`migrarAConfiguracion`**: si vienes de antes del módulo de Configuración, haz un POST con `{"action":"migrarAConfiguracion"}`. Crea la hoja "Clases" a partir de los horarios ya usados en Inscripciones/Asistencia, y la hoja "Servicios" a partir de la tarifa que hasta entonces estaba fija en el código. No toca ningún dato de Clientes, Inscripciones, Pagos ni Asistencia. Si las hojas ya existen, no hace nada.
+- **`migrarMetodoPagoPagos`**: si vienes de antes de poder anotar el método de cobro, haz un POST con `{"action":"migrarMetodoPagoPagos"}`. Añade la columna `MetodoPago` a Pagos (vacía por defecto). Segura de repetir.
 
 ### 2. Despliega el backend (Apps Script)
 
@@ -99,8 +102,8 @@ Sube `index.html`, `css/` y `js/` a tu hosting habitual (por ejemplo, embebido e
 ### Configuración
 
 - Es la fuente de verdad de qué clases existen: los selectores de Centro/Día/Hora en Cobros, Asistencia y en el alta de clientes se rellenan a partir de la hoja "Clases", no de quién esté ya inscrito. Así se puede crear una clase nueva (por ejemplo, un horario que arranca la semana que viene) y dejarla lista para inscribir gente antes de tener ningún alumno.
-- Desactivar una clase no borra nada ni afecta a quien ya la tenga asignada: solo deja de ofrecerse al dar de alta a alguien nuevo.
-- Las tarifas de suscripción (1 o 2 clases/semana, por centro) se editan aquí en vez de estar fijas en el código. Cambiar un importe solo afecta a las cuotas que se generen a partir de ese momento — las ya creadas en Cobros no se recalculan solas.
+- Cada clase tiene tres acciones: **Editar** (cambia día/hora), **Desactivar/Reactivar** (reversible — deja de ofrecerse en los selectores pero no afecta a quien ya la tenga asignada ni borra histórico) y **Eliminar** (borrado definitivo de la fila del catálogo; como Inscripciones/Pagos/Asistencia guardan su propio Centro/Día/Hora como texto y no una referencia a esta fila, eliminarla no afecta a ningún dato ya existente).
+- Las tarifas de suscripción se editan aquí en vez de estar fijas en el código: **1 clase/semana**, **2 clases/semana** y **Especial** (importe por defecto para clientes marcados con tarifa especial — ver Cobros). Cambiar un importe solo afecta a las cuotas que se generen a partir de ese momento — las ya creadas en Cobros no se recalculan solas.
 
 ### Clientes
 
@@ -108,20 +111,14 @@ Sube `index.html`, `css/` y `js/` a tu hosting habitual (por ejemplo, embebido e
 - Un mismo cliente puede tener varias inscripciones (estar en más de un grupo) sin repetir sus datos de contacto.
 - El nombre que se guarda en Pagos/Asistencia es una copia del nombre del cliente en el momento de la inscripción — si luego cambias el nombre en Clientes, las inscripciones ya creadas no se actualizan solas.
 - Por defecto la lista oculta a quien está de baja del todo (sin ninguna inscripción activa); hay un checkbox para mostrarlos.
-- "Gestionar" (en la ficha del cliente o desde una fila de Cobros) permite dar de baja un grupo concreto y marcar/desmarcar tarifa especial por centro.
+- "Editar" (en la ficha del cliente o desde una fila de Cobros) es el único sitio donde se gestiona todo sobre un cliente: sus datos básicos, asignar centro+horario (añadir clase), dar de baja un grupo concreto, marcar/desmarcar tarifa especial por centro, y dar de baja o reactivar al cliente entero cuando no tiene ninguna clase activa. Un cliente nunca se borra: pasa a estado "baja" (o su última inscripción activa se da de baja) y su ficha se conserva por si vuelve.
+- Al crear un cliente nuevo ("+ Nuevo cliente") también se puede asignar de una vez su primer centro y clase, sin tener que abrir "Editar" después — es opcional, se puede dejar "Sin asignar todavía".
 
 ### Cobros
 
-- **Es una tarifa de suscripción, no de clases sueltas.** El importe depende de cuántas inscripciones activas tiene un cliente en un centro (1 o 2 clases/semana), según esta tabla fija en `Code.gs`:
-
-  | Centro | 1 clase/semana | 2 clases/semana |
-  |---|---|---|
-  | Soma | 35€ | 60€ |
-  | Gema Lanza | 35€ | 55€ |
-
-  Si algún día alguien tiene 3+ clases/semana en el mismo centro (hoy no hay ningún caso), no hay tarifa definida y el importe queda vacío como si fuera especial.
-- **Tarifa especial**: marcada por cliente+centro desde "Gestionar", deja el importe vacío para rellenarlo tú a mano (bonos, gente que no cobras, etc.).
-- La pantalla de Cobros va por **Centro → lista de clientes** de ese centro (no por clase/horario, ya que la cuota es por cliente): cada fila es una cuota mensual, editable.
+- **Es una tarifa de suscripción, no de clases sueltas.** El importe depende de cuántas inscripciones activas tiene un cliente en un centro (1 o 2 clases/semana), según la tarifa configurada en Configuración → Servicios (por defecto Soma 35€/60€, Gema Lanza 35€/55€). Si algún día alguien tiene 3+ clases/semana en el mismo centro (hoy no hay ningún caso), no hay tarifa definida y el importe queda vacío.
+- **Tarifa especial**: marcada por cliente+centro desde "Editar", precarga el importe de la tarifa "Especial" configurada en Configuración → Servicios (o lo deja vacío si esa tarifa no se ha definido) para rellenarlo o ajustarlo a mano (bonos, gente que no cobras, etc.) — el campo de importe siempre es editable.
+- La pantalla de Cobros va por **Centro → lista de clientes** de ese centro (no por clase/horario, ya que la cuota es por cliente): cada fila es una cuota mensual, editable, con un selector de **método de pago** (efectivo, bizum, otro).
 - Dar de baja un grupo no borra el historial: dentro del mes en curso, la cuota sigue visible (marcada "de baja" si ya no le queda ningún grupo activo en ese centro) por si falta cobrarla; desde el mes siguiente deja de generarse.
 - Al abrir un mes/centro por primera vez, la app crea automáticamente las filas de pago (pendientes, con el importe de tarifa) para todos los clientes activos en ese centro.
 

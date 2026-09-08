@@ -7,7 +7,7 @@
  *
  *    "Clientes":      ID | Nombre | Referencia | Telefono | Notas | Estado
  *    "Inscripciones": ID | ID_Cliente | Nombre | Centro | Dia | Hora | Estado | FechaAlta | FechaBaja | TarifaEspecial
- *    "Pagos":         ID | Mes | ID_Cliente | Nombre | Centro | ClasesSemana | Importe | Pagado | FechaPago | Notas
+ *    "Pagos":         ID | Mes | ID_Cliente | Nombre | Centro | ClasesSemana | Importe | Pagado | FechaPago | MetodoPago | Notas
  *    "Asistencia":    ID | Fecha | ID_Alumno | ID_Cliente | Nombre | Centro | Dia | Hora | Tipo | Estado | Notas
  *    "Clases":        ID | Centro | Dia | Hora | Estado
  *    "Servicios":     ID | Centro | ClasesSemana | Importe
@@ -43,6 +43,7 @@
  * - migrarAConfiguracion: crea "Clases" (a partir de los horarios ya usados
  *   en Inscripciones/Asistencia) y "Servicios" (a partir de la tarifa fija
  *   TARIFAS) sin tocar ningún dato de clientes/inscripciones/pagos.
+ * - migrarMetodoPagoPagos: añade "MetodoPago" a Pagos (vacío por defecto).
  */
 
 const SS_ID = '1BAXS6x2qk6GPI5-kmN3LPqtdPntm2g0ex8qQt0IALeY';
@@ -137,7 +138,7 @@ function doGet(e) {
     let result;
     switch (action) {
       case 'ping':
-        result = { version: 'v14-configuracion-clases-servicios', ahora: new Date().toISOString() };
+        result = { version: 'v15-editar-cliente-y-tarifas-especiales', ahora: new Date().toISOString() };
         break;
       case 'getClientes':
         result = getClientes();
@@ -234,6 +235,9 @@ function doPost(e) {
       case 'reactivarClase':
         result = reactivarClase(body.id);
         break;
+      case 'eliminarClase':
+        result = eliminarClase(body.id);
+        break;
       case 'setServicio':
         result = setServicio(body);
         break;
@@ -251,6 +255,9 @@ function doPost(e) {
         break;
       case 'migrarAConfiguracion':
         result = migrarAConfiguracion();
+        break;
+      case 'migrarMetodoPagoPagos':
+        result = migrarMetodoPagoPagos();
         break;
       case 'repararFormatoPagos':
         result = repararFormatoPagos();
@@ -526,25 +533,48 @@ function reactivarClase(id) {
   throw new Error('Clase no encontrada');
 }
 
+// Borrado definitivo del catálogo (a diferencia de bajaClase, que es
+// reversible). Inscripciones/Pagos/Asistencia guardan su propio Centro/Dia/
+// Hora como texto, no una referencia al ID de Clases, así que borrar una
+// clase de aquí no afecta a ningún dato ya existente — solo deja de poder
+// elegirse en los selectores.
+function eliminarClase(id) {
+  const sheet = getSheet_(SHEET_CLASES);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const idxId = headers.indexOf('ID');
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idxId]) === String(id)) {
+      sheet.deleteRow(i + 1);
+      return { deleted: true };
+    }
+  }
+  throw new Error('Clase no encontrada');
+}
+
 // --- Configuración: servicios (tarifa de suscripción por Centro+ClasesSemana) ---
 
 function getServicios() {
   return sheetToObjects_(getSheet_(SHEET_SERVICIOS));
 }
 
-// Mapa { centro: { clasesSemana: importe } } a partir de la hoja "Servicios",
-// para no leerla fila a fila cada vez que getPagosMes calcula un importe.
+// Mapa { centro: { clave: importe } } a partir de la hoja "Servicios", para no
+// leerla fila a fila cada vez que getPagosMes calcula un importe. La clave es
+// 1 o 2 (número de clases/semana) o el texto 'especial' (tarifa especial).
 function getTarifaMapa_() {
   const mapa = {};
   getServicios().forEach(function (s) {
     if (!mapa[s.Centro]) mapa[s.Centro] = {};
-    mapa[s.Centro][Number(s.ClasesSemana)] = Number(s.Importe);
+    const clave = s.ClasesSemana === 'especial' ? 'especial' : Number(s.ClasesSemana);
+    mapa[s.Centro][clave] = Number(s.Importe);
   });
   return mapa;
 }
 
-// Crea o actualiza la tarifa de un centro para un número de clases/semana
-// concreto (hoy solo se usan 1 y 2, ver TARIFAS histórico).
+// Crea o actualiza la tarifa de un centro para una clave de tarifa concreta:
+// 1, 2 (clases/semana) o 'especial'. Comparamos como texto porque la clave
+// puede ser numérica o el texto 'especial'.
 function setServicio(body) {
   const sheet = getSheet_(SHEET_SERVICIOS);
   const data = sheet.getDataRange().getValues();
@@ -554,13 +584,13 @@ function setServicio(body) {
   const idxImporte = headers.indexOf('Importe');
 
   for (let i = 1; i < data.length; i++) {
-    if (data[i][idxCentro] === body.centro && Number(data[i][idxClases]) === Number(body.clasesSemana)) {
+    if (data[i][idxCentro] === body.centro && String(data[i][idxClases]) === String(body.clasesSemana)) {
       sheet.getRange(i + 1, idxImporte + 1).setValue(body.importe);
       return { updated: true };
     }
   }
   appendRow_(sheet, {
-    ID: Utilities.getUuid(), Centro: body.centro, ClasesSemana: Number(body.clasesSemana), Importe: body.importe
+    ID: Utilities.getUuid(), Centro: body.centro, ClasesSemana: body.clasesSemana, Importe: body.importe
   });
   return { created: true };
 }
@@ -570,8 +600,9 @@ function setServicio(body) {
  * (no una clase suelta): es una cuota de suscripción. Si un cliente activo
  * ese mes en un centro todavía no tiene fila de pago, se crea con el
  * importe de tarifa según cuántas inscripciones activas tiene en ese centro
- * (1 o 2 clases/semana, según la hoja "Servicios") — o vacío si tiene
- * marcada tarifa especial.
+ * (1 o 2 clases/semana, según la hoja "Servicios") — o, si tiene marcada
+ * tarifa especial, con el importe de la tarifa "especial" configurada (o
+ * vacío para rellenar a mano si esa tarifa no se ha definido).
  */
 function getPagosMes(mes) {
   const sheetPagos = getSheet_(SHEET_PAGOS);
@@ -611,7 +642,9 @@ function getPagosMes(mes) {
     const g = grupos[key];
     const cliente = clientePorId[g.idCliente];
     const tarifaCentro = tarifaMapa[g.centro] || {};
-    const importe = g.especial ? '' : (tarifaCentro[g.clases] !== undefined ? tarifaCentro[g.clases] : '');
+    const importe = g.especial
+      ? (tarifaCentro['especial'] !== undefined ? tarifaCentro['especial'] : '')
+      : (tarifaCentro[g.clases] !== undefined ? tarifaCentro[g.clases] : '');
     const nuevoPago = {
       ID: Utilities.getUuid(),
       Mes: mes,
@@ -622,6 +655,7 @@ function getPagosMes(mes) {
       Importe: importe,
       Pagado: false,
       FechaPago: '',
+      MetodoPago: '',
       Notas: ''
     };
     appendRow_(sheetPagos, nuevoPago);
@@ -641,6 +675,7 @@ function setPago(body) {
   const idxImporte = headers.indexOf('Importe');
   const idxPagado = headers.indexOf('Pagado');
   const idxFecha = headers.indexOf('FechaPago');
+  const idxMetodo = headers.indexOf('MetodoPago');
   const idxNotas = headers.indexOf('Notas');
 
   for (let i = 1; i < data.length; i++) {
@@ -650,6 +685,7 @@ function setPago(body) {
       sheet.getRange(i + 1, idxImporte + 1).setValue(body.importe);
       sheet.getRange(i + 1, idxPagado + 1).setValue(body.pagado);
       sheet.getRange(i + 1, idxFecha + 1).setValue(body.fechaPago || '');
+      if (idxMetodo !== -1) sheet.getRange(i + 1, idxMetodo + 1).setValue(body.metodoPago || '');
       sheet.getRange(i + 1, idxNotas + 1).setValue(body.notas || '');
       return { updated: true };
     }
@@ -1089,6 +1125,27 @@ function migrarAConfiguracion() {
   }
 
   return resultado;
+}
+
+/**
+ * Añade la columna "MetodoPago" a Pagos (vacía por defecto) si todavía no
+ * existe, para poder anotar cómo se cobró cada cuota (efectivo/bizum/otro).
+ */
+function migrarMetodoPagoPagos() {
+  const sheet = getSheet_(SHEET_PAGOS);
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  if (headers.indexOf('MetodoPago') !== -1) {
+    return { migrado: false, motivo: 'Ya existe la columna "MetodoPago"' };
+  }
+  const columna = headers.length + 1;
+  sheet.getRange(1, columna).setValue('MetodoPago');
+  const filas = sheet.getLastRow() - 1;
+  if (filas > 0) {
+    const valores = [];
+    for (let i = 0; i < filas; i++) valores.push(['']);
+    sheet.getRange(2, columna, filas, 1).setValues(valores);
+  }
+  return { migrado: true, filas: filas };
 }
 
 // Reparación puntual de formato si "migrarASuscripciones" ya se ejecutó

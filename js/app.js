@@ -399,7 +399,6 @@ function renderClienteCard(c) {
       '</div>' +
       (c.Telefono ? '<div class="alumno-meta">' + renderTelefonoWhatsapp(c.Telefono) + '</div>' : '') +
       (c.Notas ? '<div class="alumno-meta">' + c.Notas + '</div>' : '') +
-      '<button class="btn-danger-link" data-accion="gestionar-cliente" data-id="' + c.ID + '">Gestionar</button>' +
     '</div>';
 }
 
@@ -513,8 +512,10 @@ function renderSesionClienteCard(f) {
 
 // --- Configuración: catálogo de clases y tarifas por centro ---
 
-function servicioImporte(servicios, clases) {
-  const s = servicios.find(function (x) { return Number(x.ClasesSemana) === clases; });
+// clave puede ser 1, 2 (número de clases/semana) o 'especial' — comparamos
+// como texto para que valga para los dos tipos sin distinguir casos.
+function servicioImporte(servicios, clave) {
+  const s = servicios.find(function (x) { return String(x.ClasesSemana) === String(clave); });
   return s ? s.Importe : '';
 }
 
@@ -547,9 +548,13 @@ function renderConfiguracionClaseCard(c) {
     '<div class="card alumno-card ' + (activa ? '' : 'cancelada') + '">' +
       '<div class="alumno-top">' +
         '<span class="alumno-nombre">' + c.Dia + ' ' + c.Hora + (activa ? '' : ' <span class="alumno-meta">(inactiva)</span>') + '</span>' +
+      '</div>' +
+      '<div class="alumno-controls">' +
+        '<button class="back-link" data-accion="editar-clase" data-id="' + c.ID + '">Editar</button>' +
         '<button class="btn-danger-link" data-accion="' + (activa ? 'baja-clase' : 'reactivar-clase') + '" data-id="' + c.ID + '">' +
           (activa ? 'Desactivar' : 'Reactivar') +
         '</button>' +
+        '<button class="btn-danger-link" data-accion="eliminar-clase" data-id="' + c.ID + '" data-nombre="' + c.Dia + ' ' + c.Hora + '">Eliminar</button>' +
       '</div>' +
     '</div>';
 }
@@ -559,16 +564,18 @@ function renderConfiguracionTarifasCentro(centro) {
   return '' +
     '<div class="card">' +
       '<div class="alumno-nombre">' + centro + '</div>' +
-      '<div class="alumno-controls">' +
-        '<span class="alumno-meta">1 clase/semana</span>' +
-        '<input type="number" class="importe-input" data-accion="cambiar-tarifa" data-centro="' + centro + '" data-clases="1" value="' + servicioImporte(servicios, 1) + '" step="0.5">' +
-        '<span>€</span>' +
-      '</div>' +
-      '<div class="alumno-controls">' +
-        '<span class="alumno-meta">2 clases/semana</span>' +
-        '<input type="number" class="importe-input" data-accion="cambiar-tarifa" data-centro="' + centro + '" data-clases="2" value="' + servicioImporte(servicios, 2) + '" step="0.5">' +
-        '<span>€</span>' +
-      '</div>' +
+      renderConfiguracionTarifaInput(centro, servicios, 1, '1 clase/semana') +
+      renderConfiguracionTarifaInput(centro, servicios, 2, '2 clases/semana') +
+      renderConfiguracionTarifaInput(centro, servicios, 'especial', 'Tarifa especial') +
+    '</div>';
+}
+
+function renderConfiguracionTarifaInput(centro, servicios, clave, etiqueta) {
+  return '' +
+    '<div class="alumno-controls">' +
+      '<span class="alumno-meta">' + etiqueta + '</span>' +
+      '<input type="number" class="importe-input" data-accion="cambiar-tarifa" data-centro="' + centro + '" data-clases="' + clave + '" value="' + servicioImporte(servicios, clave) + '" step="0.5">' +
+      '<span>€</span>' +
     '</div>';
 }
 
@@ -631,6 +638,8 @@ function esPagado(p) {
   return p.Pagado === true || p.Pagado === 'TRUE' || p.Pagado === 'true';
 }
 
+const ETIQUETAS_METODO_PAGO = { efectivo: 'Efectivo', bizum: 'Bizum', otro: 'Otro' };
+
 function renderPagoCard(p) {
   const pagado = esPagado(p);
   const especial = p.Importe === '' || p.Importe === null || p.Importe === undefined;
@@ -646,7 +655,7 @@ function renderPagoCard(p) {
     '<div class="card alumno-card ' + (pagado ? 'pagado' : 'pendiente') + '">' +
       '<div class="alumno-top">' +
         '<span class="alumno-nombre">' + p.Nombre + (deBaja ? ' <span class="alumno-meta">(de baja)</span>' : '') + '</span>' +
-        '<button class="back-link" data-accion="gestionar-cliente" data-id="' + p.ID_Cliente + '">Gestionar</button>' +
+        '<button class="back-link" data-accion="editar-cliente" data-id="' + p.ID_Cliente + '">Editar</button>' +
       '</div>' +
       (referencia ? '<div class="alumno-meta">' + referencia + '</div>' : '') +
       '<div class="alumno-meta">' + etiqueta + '</div>' +
@@ -655,6 +664,14 @@ function renderPagoCard(p) {
         '<span>Pagado</span>' +
         '<input type="number" class="importe-input" data-accion="cambiar-importe" data-key="' + clave + '" value="' + (especial ? '' : p.Importe) + '" step="0.5" placeholder="' + (especial ? 'importe' : '') + '">' +
         '<span>€</span>' +
+      '</div>' +
+      '<div class="alumno-controls">' +
+        '<select class="select-estado" data-accion="cambiar-metodo" data-key="' + clave + '">' +
+          '<option value="">— Método —</option>' +
+          Object.keys(ETIQUETAS_METODO_PAGO).map(function (m) {
+            return '<option value="' + m + '"' + (p.MetodoPago === m ? ' selected' : '') + '>' + ETIQUETAS_METODO_PAGO[m] + '</option>';
+          }).join('') +
+        '</select>' +
       '</div>' +
       (pagado && p.FechaPago ? '<div class="alumno-meta">Pagado el ' + formateaFecha(p.FechaPago) + '</div>' : '') +
     '</div>';
@@ -790,6 +807,11 @@ function bindScreenEvents() {
         const partes = el.dataset.key.split('|');
         await actualizarPago(partes[0], partes[1], { Importe: parseFloat(el.value) || 0 });
       });
+    } else if (accion === 'cambiar-metodo') {
+      el.addEventListener('change', async function () {
+        const partes = el.dataset.key.split('|');
+        await actualizarPago(partes[0], partes[1], { MetodoPago: el.value });
+      });
     } else if (accion === 'abrir-alta-alumno') {
       el.addEventListener('click', function () {
         abrirModalAlta(state.centro);
@@ -833,10 +855,6 @@ function bindScreenEvents() {
     } else if (accion === 'editar-cliente') {
       el.addEventListener('click', function () {
         abrirModalEditarCliente(el.dataset.id);
-      });
-    } else if (accion === 'gestionar-cliente') {
-      el.addEventListener('click', function () {
-        abrirModalGestionarCliente(el.dataset.id);
       });
     } else if (accion === 'volver-consultas') {
       el.addEventListener('click', function () {
@@ -882,11 +900,20 @@ function bindScreenEvents() {
           mostrarToast('Error: ' + err.message);
         }
       });
+    } else if (accion === 'editar-clase') {
+      el.addEventListener('click', function () {
+        abrirModalEditarClase(el.dataset.id);
+      });
+    } else if (accion === 'eliminar-clase') {
+      el.addEventListener('click', function () {
+        abrirModalEliminarClase(el.dataset.id, el.dataset.nombre);
+      });
     } else if (accion === 'cambiar-tarifa') {
       el.addEventListener('change', async function () {
         try {
+          const clasesSemana = el.dataset.clases === 'especial' ? 'especial' : Number(el.dataset.clases);
           await apiPost('setServicio', {
-            centro: el.dataset.centro, clasesSemana: Number(el.dataset.clases), importe: parseFloat(el.value) || 0
+            centro: el.dataset.centro, clasesSemana: clasesSemana, importe: parseFloat(el.value) || 0
           });
           mostrarToast('Tarifa actualizada');
           await cargarServicios();
@@ -910,6 +937,7 @@ async function actualizarPago(idCliente, centro, cambios) {
       importe: pago.Importe,
       pagado: pago.Pagado === true || pago.Pagado === 'true' || pago.Pagado === 'TRUE',
       fechaPago: pago.FechaPago,
+      metodoPago: pago.MetodoPago || '',
       notas: pago.Notas || ''
     });
     mostrarToast('Guardado');
@@ -974,6 +1002,81 @@ function abrirModalNuevaClase(centro) {
     try {
       await apiPost('addClase', { centro: centro, dia: dia, hora: hora });
       mostrarToast('Clase creada');
+      overlay.remove();
+      await cargarClases();
+      render();
+    } catch (err) {
+      mostrarToast('Error: ' + err.message);
+    }
+  });
+}
+
+// --- Modal: editar una clase del catálogo (día/hora) ---
+
+function abrirModalEditarClase(id) {
+  const clase = state.clases.find(function (c) { return String(c.ID) === String(id); });
+  if (!clase) return;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = '' +
+    '<div class="modal-sheet">' +
+      '<h2>Editar clase de ' + clase.Centro + '</h2>' +
+      '<div class="field"><label>Día</label>' +
+        '<select id="ec-dia">' +
+          ORDEN_DIAS.map(function (d) { return '<option value="' + d + '"' + (d === clase.Dia ? ' selected' : '') + '>' + d + '</option>'; }).join('') +
+        '</select>' +
+      '</div>' +
+      '<div class="field"><label>Hora (ej. 18:00)</label><input type="text" id="ec-hora" value="' + clase.Hora + '"></div>' +
+      '<p class="alumno-meta">Los clientes y el histórico ya guardados con el horario anterior no cambian solos.</p>' +
+      '<div class="modal-actions">' +
+        '<button class="btn btn-secondary" id="cancelar-ec">Cancelar</button>' +
+        '<button class="btn btn-primary" id="confirmar-ec-btn">Guardar</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+
+  document.getElementById('cancelar-ec').addEventListener('click', function () { overlay.remove(); });
+  document.getElementById('confirmar-ec-btn').addEventListener('click', async function () {
+    const dia = document.getElementById('ec-dia').value;
+    const hora = document.getElementById('ec-hora').value.trim();
+    if (!hora) {
+      mostrarToast('Escribe la hora');
+      return;
+    }
+    try {
+      await apiPost('actualizarClase', { id: id, dia: dia, hora: hora });
+      mostrarToast('Clase actualizada');
+      overlay.remove();
+      await cargarClases();
+      render();
+    } catch (err) {
+      mostrarToast('Error: ' + err.message);
+    }
+  });
+}
+
+// --- Modal: eliminar definitivamente una clase del catálogo ---
+
+function abrirModalEliminarClase(id, nombre) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = '' +
+    '<div class="modal-sheet">' +
+      '<h2>Eliminar clase</h2>' +
+      '<p>Se borrará por completo "' + nombre + '" del catálogo de Configuración. No se puede deshacer. Los clientes e histórico que ya usaron este horario no se ven afectados, pero dejará de poder elegirse.</p>' +
+      '<div class="modal-actions">' +
+        '<button class="btn btn-secondary" id="cancelar-elc">Cancelar</button>' +
+        '<button class="btn btn-danger" id="confirmar-elc-btn">Eliminar</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+
+  document.getElementById('cancelar-elc').addEventListener('click', function () { overlay.remove(); });
+  document.getElementById('confirmar-elc-btn').addEventListener('click', async function () {
+    try {
+      await apiPost('eliminarClase', { id: id });
+      mostrarToast('Clase eliminada');
       overlay.remove();
       await cargarClases();
       render();
@@ -1082,6 +1185,41 @@ function abrirModalAlta(centroFijo) {
 
 // --- Modal: nuevo cliente (desde el módulo Clientes) ---
 
+// Campos opcionales de Centro+Clase para asignar de entrada al crear un
+// cliente, reutilizando el mismo selector dependiente que "+ Añadir clase".
+function camposAltaClaseHtml() {
+  return '' +
+    '<div class="field"><label>Centro (opcional)</label>' +
+      '<select id="cli-centro">' +
+        '<option value="">Sin asignar todavía</option>' +
+        CENTROS.map(function (c) { return '<option value="' + c + '">' + c + '</option>'; }).join('') +
+      '</select>' +
+    '</div>' +
+    '<div class="field" id="cli-horario-campo" hidden></div>';
+}
+
+function bindCamposAltaClase() {
+  document.getElementById('cli-centro').addEventListener('change', function (e) {
+    const campo = document.getElementById('cli-horario-campo');
+    if (!e.target.value) {
+      campo.hidden = true;
+      campo.innerHTML = '';
+      return;
+    }
+    campo.hidden = false;
+    campo.innerHTML = '<label>Clase</label>' + opcionesHorarioHtml(e.target.value, 'cli-horario');
+  });
+}
+
+async function crearInscripcionInicialSiProcede(idCliente) {
+  const centro = document.getElementById('cli-centro').value;
+  if (!centro) return;
+  const selectHorario = document.getElementById('cli-horario');
+  if (!selectHorario) return;
+  const partes = selectHorario.value.split('|');
+  await apiPost('addInscripcion', { idCliente: idCliente, centro: centro, dia: partes[0], hora: partes[1], fechaAlta: hoyISO() });
+}
+
 function abrirModalNuevoCliente() {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
@@ -1092,12 +1230,14 @@ function abrirModalNuevoCliente() {
       '<div class="field"><label>Referencia (opcional)</label><input type="text" id="cli-referencia" placeholder="ej. SV L 17:30"></div>' +
       '<div class="field"><label>Teléfono</label><input type="text" id="cli-telefono"></div>' +
       '<div class="field"><label>Notas</label><input type="text" id="cli-notas"></div>' +
+      camposAltaClaseHtml() +
       '<div class="modal-actions">' +
         '<button class="btn btn-secondary" id="cancelar-cliente">Cancelar</button>' +
         '<button class="btn btn-primary" id="confirmar-cliente-btn">Guardar</button>' +
       '</div>' +
     '</div>';
   document.body.appendChild(overlay);
+  bindCamposAltaClase();
 
   document.getElementById('cancelar-cliente').addEventListener('click', function () { overlay.remove(); });
   document.getElementById('confirmar-cliente-btn').addEventListener('click', async function () {
@@ -1111,10 +1251,11 @@ function abrirModalNuevoCliente() {
     }
     if (!avisoTelefonoDuplicado(telefono)) return;
     try {
-      await apiPost('addCliente', { nombre: nombre, referencia: referencia, telefono: telefono, notas: notas });
+      const nuevoCliente = await apiPost('addCliente', { nombre: nombre, referencia: referencia, telefono: telefono, notas: notas });
+      await crearInscripcionInicialSiProcede(nuevoCliente.ID);
       mostrarToast('Cliente creado');
       overlay.remove();
-      await cargarClientes();
+      await Promise.all([cargarAlumnos(), cargarClientes()]);
       render();
     } catch (err) {
       mostrarToast('Error: ' + err.message);
@@ -1122,57 +1263,13 @@ function abrirModalNuevoCliente() {
   });
 }
 
-// --- Modal: editar cliente existente ---
+// --- Modal: editar cliente existente — datos básicos, clases asignadas
+// (alta/baja/tarifa especial por centro) y baja/reactivación del cliente ---
 
 function abrirModalEditarCliente(id) {
   const cliente = state.clientes.find(function (c) { return String(c.ID) === String(id); });
   if (!cliente) return;
-
-  const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
-  overlay.innerHTML = '' +
-    '<div class="modal-sheet">' +
-      '<h2>Editar cliente</h2>' +
-      '<div class="field"><label>Nombre completo</label><input type="text" id="cli-nombre" value="' + (cliente.Nombre || '') + '"></div>' +
-      '<div class="field"><label>Referencia</label><input type="text" id="cli-referencia" value="' + (cliente.Referencia || '') + '" placeholder="ej. SV L 17:30"></div>' +
-      '<div class="field"><label>Teléfono</label><input type="text" id="cli-telefono" value="' + (cliente.Telefono || '') + '"></div>' +
-      '<div class="field"><label>Notas</label><input type="text" id="cli-notas" value="' + (cliente.Notas || '') + '"></div>' +
-      '<p class="alumno-meta">Si cambias el nombre, las inscripciones ya creadas no se actualizan solas (Cobros/Asistencia seguirán mostrando el nombre con el que se dieron de alta).</p>' +
-      '<div class="modal-actions">' +
-        '<button class="btn btn-secondary" id="cancelar-cliente">Cancelar</button>' +
-        '<button class="btn btn-primary" id="confirmar-cliente-btn">Guardar cambios</button>' +
-      '</div>' +
-    '</div>';
-  document.body.appendChild(overlay);
-
-  document.getElementById('cancelar-cliente').addEventListener('click', function () { overlay.remove(); });
-  document.getElementById('confirmar-cliente-btn').addEventListener('click', async function () {
-    const nombre = document.getElementById('cli-nombre').value.trim();
-    const referencia = document.getElementById('cli-referencia').value.trim();
-    const telefono = document.getElementById('cli-telefono').value.trim();
-    const notas = document.getElementById('cli-notas').value.trim();
-    if (!nombre) {
-      mostrarToast('Escribe al menos el nombre');
-      return;
-    }
-    try {
-      await apiPost('actualizarCliente', { id: id, nombre: nombre, referencia: referencia, telefono: telefono, notas: notas });
-      mostrarToast('Cliente actualizado');
-      overlay.remove();
-      await cargarClientes();
-      render();
-    } catch (err) {
-      mostrarToast('Error: ' + err.message);
-    }
-  });
-}
-
-// --- Modal: gestionar cliente (baja por grupo + tarifa especial por centro) ---
-
-function abrirModalGestionarCliente(idCliente) {
-  const cliente = state.clientes.find(function (c) { return String(c.ID) === String(idCliente); });
-  if (!cliente) return;
-  const inscripciones = inscripcionesDeCliente(idCliente);
+  const inscripciones = inscripcionesDeCliente(id);
 
   const porCentro = {};
   inscripciones.forEach(function (i) {
@@ -1210,27 +1307,55 @@ function abrirModalGestionarCliente(idCliente) {
   overlay.className = 'modal-overlay';
   overlay.innerHTML = '' +
     '<div class="modal-sheet">' +
-      '<h2>Gestionar a ' + cliente.Nombre + '</h2>' +
+      '<h2>Editar cliente</h2>' +
+      '<div class="field"><label>Nombre completo</label><input type="text" id="cli-nombre" value="' + (cliente.Nombre || '') + '"></div>' +
+      '<div class="field"><label>Referencia</label><input type="text" id="cli-referencia" value="' + (cliente.Referencia || '') + '" placeholder="ej. SV L 17:30"></div>' +
+      '<div class="field"><label>Teléfono</label><input type="text" id="cli-telefono" value="' + (cliente.Telefono || '') + '"></div>' +
+      '<div class="field"><label>Notas</label><input type="text" id="cli-notas" value="' + (cliente.Notas || '') + '"></div>' +
+      '<p class="alumno-meta">Si cambias el nombre, las inscripciones ya creadas no se actualizan solas (Cobros/Asistencia seguirán mostrando el nombre con el que se dieron de alta).</p>' +
+      '<div class="modal-actions">' +
+        '<button class="btn btn-secondary" id="cancelar-cliente">Cancelar</button>' +
+        '<button class="btn btn-primary" id="confirmar-cliente-btn">Guardar cambios</button>' +
+      '</div>' +
+      '<div class="section-title">Centro y horario</div>' +
       contenidoCentros +
       '<button class="btn btn-secondary btn-block" id="abrir-anadir-clase-btn">+ Añadir clase</button>' +
       '<div class="modal-actions">' +
-        '<button class="btn btn-secondary" id="cerrar-gestionar-cliente">Cerrar</button>' +
+        '<button class="btn btn-secondary" id="cerrar-editar-cliente">Cerrar</button>' +
       '</div>' +
     '</div>';
   document.body.appendChild(overlay);
 
-  document.getElementById('cerrar-gestionar-cliente').addEventListener('click', function () { overlay.remove(); });
+  document.getElementById('cancelar-cliente').addEventListener('click', function () { overlay.remove(); });
+  document.getElementById('cerrar-editar-cliente').addEventListener('click', function () { overlay.remove(); });
+  document.getElementById('confirmar-cliente-btn').addEventListener('click', async function () {
+    const nombre = document.getElementById('cli-nombre').value.trim();
+    const referencia = document.getElementById('cli-referencia').value.trim();
+    const telefono = document.getElementById('cli-telefono').value.trim();
+    const notas = document.getElementById('cli-notas').value.trim();
+    if (!nombre) {
+      mostrarToast('Escribe al menos el nombre');
+      return;
+    }
+    try {
+      await apiPost('actualizarCliente', { id: id, nombre: nombre, referencia: referencia, telefono: telefono, notas: notas });
+      mostrarToast('Cliente actualizado');
+      await cargarClientes();
+    } catch (err) {
+      mostrarToast('Error: ' + err.message);
+    }
+  });
 
   document.getElementById('abrir-anadir-clase-btn').addEventListener('click', function () {
     overlay.remove();
-    abrirModalAnadirClase(idCliente);
+    abrirModalAnadirClase(id);
   });
 
   const btnBajaCliente = document.getElementById('baja-cliente-btn');
   if (btnBajaCliente) {
     btnBajaCliente.addEventListener('click', async function () {
       try {
-        await apiPost('bajaCliente', { id: idCliente });
+        await apiPost('bajaCliente', { id: id });
         mostrarToast('Cliente dado de baja');
         overlay.remove();
         await cargarClientes();
@@ -1245,7 +1370,7 @@ function abrirModalGestionarCliente(idCliente) {
   if (btnReactivarCliente) {
     btnReactivarCliente.addEventListener('click', async function () {
       try {
-        await apiPost('reactivarCliente', { id: idCliente });
+        await apiPost('reactivarCliente', { id: id });
         mostrarToast('Cliente reactivado');
         overlay.remove();
         await cargarClientes();
@@ -1274,7 +1399,7 @@ function abrirModalGestionarCliente(idCliente) {
   overlay.querySelectorAll('[data-especial-centro]').forEach(function (chk) {
     chk.addEventListener('change', async function () {
       try {
-        await apiPost('setTarifaEspecial', { idCliente: idCliente, centro: chk.dataset.especialCentro, especial: chk.checked });
+        await apiPost('setTarifaEspecial', { idCliente: id, centro: chk.dataset.especialCentro, especial: chk.checked });
         mostrarToast('Actualizado');
         await cargarAlumnos();
       } catch (err) {
