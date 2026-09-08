@@ -9,7 +9,7 @@ const ESTADOS_ASISTENCIA = [
 ];
 
 const state = {
-  modulo: 'cobros', // 'cobros' | 'asistencia' | 'clientes' | 'consultas'
+  modulo: 'cobros', // 'cobros' | 'asistencia' | 'clientes' | 'consultas' | 'configuracion'
   mes: mesActual(),
   screen: 'centro', // 'centro' | 'pagos' (cobros) | 'horario' | 'sesiones' | 'sesion' (asistencia)
   centro: null,
@@ -17,6 +17,8 @@ const state = {
   clientes: [],
   alumnos: [], // inscripciones (cliente + centro + día + hora)
   pagos: [], // cuotas de suscripción del mes (una fila por cliente+centro)
+  clases: [], // catálogo de horarios (Centro+Dia+Hora) definidos en Configuración
+  servicios: [], // tarifas de suscripción (Centro+ClasesSemana) definidas en Configuración
   fechasGuardadas: [], // fechas de sesiones ya usadas para el horario/mes actual
   sesionFecha: null,
   asistencias: [],
@@ -54,7 +56,7 @@ function esVerdadero(v) {
 const app = document.getElementById('app');
 
 async function init() {
-  await Promise.all([cargarAlumnos(), cargarClientes()]);
+  await Promise.all([cargarAlumnos(), cargarClientes(), cargarClases(), cargarServicios()]);
   render();
 }
 
@@ -74,6 +76,22 @@ async function cargarClientes() {
     state.clientes = await apiGet('getClientes');
   } catch (err) {
     mostrarToast('Error cargando clientes: ' + err.message);
+  }
+}
+
+async function cargarClases() {
+  try {
+    state.clases = await apiGet('getClases');
+  } catch (err) {
+    mostrarToast('Error cargando clases: ' + err.message);
+  }
+}
+
+async function cargarServicios() {
+  try {
+    state.servicios = await apiGet('getServicios');
+  } catch (err) {
+    mostrarToast('Error cargando servicios: ' + err.message);
   }
 }
 
@@ -118,23 +136,22 @@ async function cargarAsistenciaFecha(fecha) {
   render();
 }
 
-function alumnosActivos() {
-  return state.alumnos.filter(function (a) { return a.Estado === 'activo'; });
+function clasesActivas() {
+  return state.clases.filter(function (c) { return c.Estado === 'activo'; });
 }
 
+// Horarios disponibles de un centro, según el catálogo definido en
+// Configuración (no según quién esté ya inscrito, para poder crear una clase
+// nueva y ofrecerla al dar de alta antes de tener ningún cliente en ella).
 function horariosDeCentro(centro) {
-  const combos = {};
-  alumnosActivos()
-    .filter(function (a) { return a.Centro === centro; })
-    .forEach(function (a) {
-      const key = a.Dia + '|' + a.Hora;
-      combos[key] = { dia: a.Dia, hora: a.Hora };
+  return clasesActivas()
+    .filter(function (c) { return c.Centro === centro; })
+    .map(function (c) { return { dia: c.Dia, hora: c.Hora }; })
+    .sort(function (a, b) {
+      const diffDia = ORDEN_DIAS.indexOf(a.dia) - ORDEN_DIAS.indexOf(b.dia);
+      if (diffDia !== 0) return diffDia;
+      return a.hora.localeCompare(b.hora);
     });
-  return Object.values(combos).sort(function (a, b) {
-    const diffDia = ORDEN_DIAS.indexOf(a.dia) - ORDEN_DIAS.indexOf(b.dia);
-    if (diffDia !== 0) return diffDia;
-    return a.hora.localeCompare(b.hora);
-  });
 }
 
 function inscripcionesDeCliente(idCliente) {
@@ -190,7 +207,7 @@ function fechasParaMostrar() {
   });
 }
 
-const TITULOS_MODULO = { cobros: 'Cobros', asistencia: 'Asistencia', clientes: 'Clientes', consultas: 'Consultas' };
+const TITULOS_MODULO = { cobros: 'Cobros', asistencia: 'Asistencia', clientes: 'Clientes', consultas: 'Consultas', configuracion: 'Configuración' };
 
 function render() {
   const mostrarMes = state.modulo === 'cobros' || state.modulo === 'asistencia';
@@ -201,6 +218,7 @@ function render() {
       '<button class="pill ' + (state.modulo === 'asistencia' ? 'active' : '') + '" data-accion="cambiar-modulo" data-modulo="asistencia">Asistencia</button>' +
       '<button class="pill ' + (state.modulo === 'clientes' ? 'active' : '') + '" data-accion="cambiar-modulo" data-modulo="clientes">Clientes</button>' +
       '<button class="pill ' + (state.modulo === 'consultas' ? 'active' : '') + '" data-accion="cambiar-modulo" data-modulo="consultas">Consultas</button>' +
+      '<button class="pill ' + (state.modulo === 'configuracion' ? 'active' : '') + '" data-accion="cambiar-modulo" data-modulo="configuracion">Configuración</button>' +
     '</div>' +
     (mostrarMes ? '<input type="month" id="mes-input" value="' + state.mes + '">' : '') +
     renderScreen();
@@ -282,6 +300,7 @@ function renderScreen() {
   }
   if (state.modulo === 'clientes') return renderClientes();
   if (state.modulo === 'consultas') return renderConsultas();
+  if (state.modulo === 'configuracion') return renderConfiguracion();
   if (state.screen === 'centro') return renderCentros();
   if (state.modulo === 'cobros') return renderPagosCentro();
   if (state.screen === 'horario') return renderHorarios();
@@ -489,6 +508,67 @@ function renderSesionClienteCard(f) {
     '<div class="card alumno-card ' + claseEstado(f.Estado) + '">' +
       '<div class="alumno-top"><span class="alumno-nombre">' + formateaFechaCorta(f.Fecha) + tipoTag + '</span></div>' +
       '<div class="alumno-meta">' + f.Centro + ' — ' + f.Dia + ' ' + f.Hora + ' · ' + etiquetaEstado + '</div>' +
+    '</div>';
+}
+
+// --- Configuración: catálogo de clases y tarifas por centro ---
+
+function servicioImporte(servicios, clases) {
+  const s = servicios.find(function (x) { return Number(x.ClasesSemana) === clases; });
+  return s ? s.Importe : '';
+}
+
+function renderConfiguracion() {
+  return '' +
+    CENTROS.map(renderConfiguracionClasesCentro).join('') +
+    '<div class="section-title">Tarifas de suscripción</div>' +
+    CENTROS.map(renderConfiguracionTarifasCentro).join('');
+}
+
+function renderConfiguracionClasesCentro(centro) {
+  const clases = state.clases
+    .filter(function (c) { return c.Centro === centro; })
+    .sort(function (a, b) {
+      const diffDia = ORDEN_DIAS.indexOf(a.Dia) - ORDEN_DIAS.indexOf(b.Dia);
+      if (diffDia !== 0) return diffDia;
+      return a.Hora.localeCompare(b.Hora);
+    });
+  return '' +
+    '<div class="section-title">' + centro + ' — Clases</div>' +
+    (clases.length === 0
+      ? '<p class="empty-state">No hay clases definidas todavía en ' + centro + '.</p>'
+      : clases.map(renderConfiguracionClaseCard).join('')) +
+    '<button class="btn btn-secondary btn-block" data-accion="abrir-nueva-clase" data-centro="' + centro + '">+ Nueva clase en ' + centro + '</button>';
+}
+
+function renderConfiguracionClaseCard(c) {
+  const activa = c.Estado === 'activo';
+  return '' +
+    '<div class="card alumno-card ' + (activa ? '' : 'cancelada') + '">' +
+      '<div class="alumno-top">' +
+        '<span class="alumno-nombre">' + c.Dia + ' ' + c.Hora + (activa ? '' : ' <span class="alumno-meta">(inactiva)</span>') + '</span>' +
+        '<button class="btn-danger-link" data-accion="' + (activa ? 'baja-clase' : 'reactivar-clase') + '" data-id="' + c.ID + '">' +
+          (activa ? 'Desactivar' : 'Reactivar') +
+        '</button>' +
+      '</div>' +
+    '</div>';
+}
+
+function renderConfiguracionTarifasCentro(centro) {
+  const servicios = state.servicios.filter(function (s) { return s.Centro === centro; });
+  return '' +
+    '<div class="card">' +
+      '<div class="alumno-nombre">' + centro + '</div>' +
+      '<div class="alumno-controls">' +
+        '<span class="alumno-meta">1 clase/semana</span>' +
+        '<input type="number" class="importe-input" data-accion="cambiar-tarifa" data-centro="' + centro + '" data-clases="1" value="' + servicioImporte(servicios, 1) + '" step="0.5">' +
+        '<span>€</span>' +
+      '</div>' +
+      '<div class="alumno-controls">' +
+        '<span class="alumno-meta">2 clases/semana</span>' +
+        '<input type="number" class="importe-input" data-accion="cambiar-tarifa" data-centro="' + centro + '" data-clases="2" value="' + servicioImporte(servicios, 2) + '" step="0.5">' +
+        '<span>€</span>' +
+      '</div>' +
     '</div>';
 }
 
@@ -776,6 +856,44 @@ function bindScreenEvents() {
         state.consultaHasta = document.getElementById('consulta-hasta').value;
         await cargarSesionesCliente();
       });
+    } else if (accion === 'abrir-nueva-clase') {
+      el.addEventListener('click', function () {
+        abrirModalNuevaClase(el.dataset.centro);
+      });
+    } else if (accion === 'baja-clase') {
+      el.addEventListener('click', async function () {
+        try {
+          await apiPost('bajaClase', { id: el.dataset.id });
+          mostrarToast('Clase desactivada');
+          await cargarClases();
+          render();
+        } catch (err) {
+          mostrarToast('Error: ' + err.message);
+        }
+      });
+    } else if (accion === 'reactivar-clase') {
+      el.addEventListener('click', async function () {
+        try {
+          await apiPost('reactivarClase', { id: el.dataset.id });
+          mostrarToast('Clase reactivada');
+          await cargarClases();
+          render();
+        } catch (err) {
+          mostrarToast('Error: ' + err.message);
+        }
+      });
+    } else if (accion === 'cambiar-tarifa') {
+      el.addEventListener('change', async function () {
+        try {
+          await apiPost('setServicio', {
+            centro: el.dataset.centro, clasesSemana: Number(el.dataset.clases), importe: parseFloat(el.value) || 0
+          });
+          mostrarToast('Tarifa actualizada');
+          await cargarServicios();
+        } catch (err) {
+          mostrarToast('Error: ' + err.message);
+        }
+      });
     }
   });
 }
@@ -824,9 +942,65 @@ function mostrarToast(texto) {
   setTimeout(function () { toast.remove(); }, 2200);
 }
 
+// --- Modal: nueva clase en el catálogo de un centro (módulo Configuración) ---
+
+function abrirModalNuevaClase(centro) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = '' +
+    '<div class="modal-sheet">' +
+      '<h2>Nueva clase en ' + centro + '</h2>' +
+      '<div class="field"><label>Día</label>' +
+        '<select id="nc-dia">' +
+          ORDEN_DIAS.map(function (d) { return '<option value="' + d + '">' + d + '</option>'; }).join('') +
+        '</select>' +
+      '</div>' +
+      '<div class="field"><label>Hora (ej. 18:00)</label><input type="text" id="nc-hora"></div>' +
+      '<div class="modal-actions">' +
+        '<button class="btn btn-secondary" id="cancelar-nc">Cancelar</button>' +
+        '<button class="btn btn-primary" id="confirmar-nc-btn">Crear</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+
+  document.getElementById('cancelar-nc').addEventListener('click', function () { overlay.remove(); });
+  document.getElementById('confirmar-nc-btn').addEventListener('click', async function () {
+    const dia = document.getElementById('nc-dia').value;
+    const hora = document.getElementById('nc-hora').value.trim();
+    if (!hora) {
+      mostrarToast('Escribe la hora');
+      return;
+    }
+    try {
+      await apiPost('addClase', { centro: centro, dia: dia, hora: hora });
+      mostrarToast('Clase creada');
+      overlay.remove();
+      await cargarClases();
+      render();
+    } catch (err) {
+      mostrarToast('Error: ' + err.message);
+    }
+  });
+}
+
 // --- Modal: alta de inscripción (elige cliente existente o crea uno nuevo) ---
 
 const OPCION_CLIENTE_NUEVO = '__nuevo__';
+
+// HTML del selector de clase (Día+Hora) de un centro, a partir del catálogo
+// definido en Configuración — o un aviso si todavía no hay ninguna creada.
+function opcionesHorarioHtml(centro, idSelect) {
+  const horarios = horariosDeCentro(centro);
+  if (horarios.length === 0) {
+    return '<p class="alumno-meta">No hay clases definidas en ' + centro + ' todavía. Créalas primero en Configuración.</p>';
+  }
+  return '<select id="' + idSelect + '">' +
+    horarios.map(function (h) {
+      const valor = h.dia + '|' + h.hora;
+      return '<option value="' + valor + '">' + h.dia + ' ' + h.hora + '</option>';
+    }).join('') +
+    '</select>';
+}
 
 function abrirModalAlta(centroFijo) {
   const clientesOrdenados = state.clientes.slice().sort(function (a, b) { return a.Nombre.localeCompare(b.Nombre); });
@@ -851,8 +1025,7 @@ function abrirModalAlta(centroFijo) {
         '<div class="field"><label>Teléfono</label><input type="text" id="alta-telefono"></div>' +
       '</div>' +
       '<div class="field"><label>Centro</label><input type="text" id="alta-centro" value="' + centroFijo + '" readonly></div>' +
-      '<div class="field"><label>Día (ej. Lunes)</label><input type="text" id="alta-dia"></div>' +
-      '<div class="field"><label>Hora (ej. 18:00)</label><input type="text" id="alta-hora"></div>' +
+      '<div class="field"><label>Clase</label>' + opcionesHorarioHtml(centroFijo, 'alta-horario') + '</div>' +
       '<p class="alumno-meta">El importe se calcula solo según la tarifa de suscripción (cuántas clases/semana tenga en este centro).</p>' +
       '<div class="modal-actions">' +
         '<button class="btn btn-secondary" id="cancelar-alta">Cancelar</button>' +
@@ -872,12 +1045,14 @@ function abrirModalAlta(centroFijo) {
   document.getElementById('cancelar-alta').addEventListener('click', function () { overlay.remove(); });
   document.getElementById('confirmar-alta-btn').addEventListener('click', async function () {
     const centro = document.getElementById('alta-centro').value.trim();
-    const dia = document.getElementById('alta-dia').value.trim();
-    const hora = document.getElementById('alta-hora').value.trim();
-    if (!centro || !dia || !hora) {
-      mostrarToast('Rellena día y hora');
+    const selectHorario = document.getElementById('alta-horario');
+    if (!selectHorario) {
+      mostrarToast('Define antes una clase en Configuración');
       return;
     }
+    const partesHorario = selectHorario.value.split('|');
+    const dia = partesHorario[0];
+    const hora = partesHorario[1];
     try {
       let idCliente = selectCliente.value;
       if (idCliente === OPCION_CLIENTE_NUEVO) {
@@ -1116,6 +1291,7 @@ function abrirModalAnadirClase(idCliente) {
   const cliente = state.clientes.find(function (c) { return String(c.ID) === String(idCliente); });
   if (!cliente) return;
 
+  const centroInicial = CENTROS[0];
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = '' +
@@ -1126,8 +1302,7 @@ function abrirModalAnadirClase(idCliente) {
           CENTROS.map(function (c) { return '<option value="' + c + '">' + c + '</option>'; }).join('') +
         '</select>' +
       '</div>' +
-      '<div class="field"><label>Día (ej. Lunes)</label><input type="text" id="clase-dia"></div>' +
-      '<div class="field"><label>Hora (ej. 18:00)</label><input type="text" id="clase-hora"></div>' +
+      '<div class="field" id="clase-horario-campo">' + opcionesHorarioHtml(centroInicial, 'clase-horario') + '</div>' +
       '<p class="alumno-meta">El importe se calcula solo según cuántas clases/semana tenga en ese centro.</p>' +
       '<div class="modal-actions">' +
         '<button class="btn btn-secondary" id="cancelar-clase">Cancelar</button>' +
@@ -1136,15 +1311,21 @@ function abrirModalAnadirClase(idCliente) {
     '</div>';
   document.body.appendChild(overlay);
 
+  document.getElementById('clase-centro').addEventListener('change', function (e) {
+    document.getElementById('clase-horario-campo').innerHTML = opcionesHorarioHtml(e.target.value, 'clase-horario');
+  });
+
   document.getElementById('cancelar-clase').addEventListener('click', function () { overlay.remove(); });
   document.getElementById('confirmar-clase-btn').addEventListener('click', async function () {
     const centro = document.getElementById('clase-centro').value;
-    const dia = document.getElementById('clase-dia').value.trim();
-    const hora = document.getElementById('clase-hora').value.trim();
-    if (!dia || !hora) {
-      mostrarToast('Rellena día y hora');
+    const selectHorario = document.getElementById('clase-horario');
+    if (!selectHorario) {
+      mostrarToast('Define antes una clase en Configuración');
       return;
     }
+    const partesHorario = selectHorario.value.split('|');
+    const dia = partesHorario[0];
+    const hora = partesHorario[1];
     try {
       await apiPost('addInscripcion', { idCliente: idCliente, centro: centro, dia: dia, hora: hora, fechaAlta: hoyISO() });
       mostrarToast('Clase añadida');

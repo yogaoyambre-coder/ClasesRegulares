@@ -7,6 +7,8 @@ App para gestión de clases, cobros y asistencia. Pensada para uso personal desd
 - ✅ Módulo de **Clientes**
 - ✅ Módulo de **Cobros**
 - ✅ Módulo de **Asistencia**
+- ✅ Módulo de **Consultas** (historial de sesiones de un cliente)
+- ✅ Módulo de **Configuración** (catálogo de clases y tarifas)
 
 ## Estructura del repo
 
@@ -48,12 +50,23 @@ Crea una hoja de cálculo nueva en Google Sheets con cuatro pestañas:
 
 > `ID_Alumno` en Asistencia apunta al `ID` de **Inscripciones**, no al de Clientes — el nombre de columna se mantuvo por compatibilidad con datos ya existentes.
 
-Todo se puede rellenar desde la propia app (Clientes → Cobros → Asistencia). Si vienes de una versión anterior, ver las migraciones abajo.
+**Pestaña "Clases"** (fila 1 = cabeceras exactas) — catálogo de horarios (Centro+Día+Hora) de cada centro, se gestiona desde el módulo Configuración:
+
+| ID | Centro | Dia | Hora | Estado |
+|----|--------|-----|------|--------|
+
+**Pestaña "Servicios"** (fila 1 = cabeceras exactas) — tarifa de suscripción mensual según centro y clases/semana, también editable desde Configuración:
+
+| ID | Centro | ClasesSemana | Importe |
+|----|--------|--------------|---------|
+
+Todo se puede rellenar desde la propia app (Configuración → Clientes → Cobros → Asistencia). Si vienes de una versión anterior, ver las migraciones abajo.
 
 #### Migraciones (una sola vez cada una, seguras de repetir)
 
 - **`migrarAClientes`**: si tu Sheet viene de antes de que existiera el módulo de Clientes (una sola pestaña "Alumnos"), haz un POST a `TU_URL/exec` con `{"action":"migrarAClientes"}`. Crea "Clientes" a partir de los nombres únicos que había en "Alumnos" y renombra "Alumnos" a "Inscripciones". Si no encuentra la hoja "Alumnos" no hace nada.
 - **`migrarASuscripciones`**: si vienes de antes del modelo de tarifas por suscripción, haz un POST con `{"action":"migrarASuscripciones"}`. Renombra `Apellidos`→`Referencia` en Clientes, añade `TarifaEspecial` a Inscripciones (quitando `PrecioDefecto`, que ya no se usa), y reestructura Pagos de "una fila por clase" a "una fila por cliente+centro" recalculando el importe según la tabla de tarifas. Cada paso comprueba si ya se aplicó, así que es segura de ejecutar más de una vez.
+- **`migrarAConfiguracion`**: si vienes de antes del módulo de Configuración, haz un POST con `{"action":"migrarAConfiguracion"}`. Crea la hoja "Clases" a partir de los horarios ya usados en Inscripciones/Asistencia, y la hoja "Servicios" a partir de la tarifa que hasta entonces estaba fija en el código. No toca ningún dato de Clientes, Inscripciones, Pagos ni Asistencia. Si las hojas ya existen, no hace nada.
 
 ### 2. Despliega el backend (Apps Script)
 
@@ -82,6 +95,12 @@ por la URL copiada en el paso anterior.
 Sube `index.html`, `css/` y `js/` a tu hosting habitual (por ejemplo, embebido en WordPress como en la app anterior), o ábrelo directamente desde un hosting estático. Al ser una SPA sin build, no requiere ningún paso de compilación.
 
 ## Notas del modelo de datos
+
+### Configuración
+
+- Es la fuente de verdad de qué clases existen: los selectores de Centro/Día/Hora en Cobros, Asistencia y en el alta de clientes se rellenan a partir de la hoja "Clases", no de quién esté ya inscrito. Así se puede crear una clase nueva (por ejemplo, un horario que arranca la semana que viene) y dejarla lista para inscribir gente antes de tener ningún alumno.
+- Desactivar una clase no borra nada ni afecta a quien ya la tenga asignada: solo deja de ofrecerse al dar de alta a alguien nuevo.
+- Las tarifas de suscripción (1 o 2 clases/semana, por centro) se editan aquí en vez de estar fijas en el código. Cambiar un importe solo afecta a las cuotas que se generen a partir de ese momento — las ya creadas en Cobros no se recalculan solas.
 
 ### Clientes
 

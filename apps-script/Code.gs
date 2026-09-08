@@ -9,12 +9,21 @@
  *    "Inscripciones": ID | ID_Cliente | Nombre | Centro | Dia | Hora | Estado | FechaAlta | FechaBaja | TarifaEspecial
  *    "Pagos":         ID | Mes | ID_Cliente | Nombre | Centro | ClasesSemana | Importe | Pagado | FechaPago | Notas
  *    "Asistencia":    ID | Fecha | ID_Alumno | ID_Cliente | Nombre | Centro | Dia | Hora | Tipo | Estado | Notas
+ *    "Clases":        ID | Centro | Dia | Hora | Estado
+ *    "Servicios":     ID | Centro | ClasesSemana | Importe
  *
  *    (Asistencia sigue usando "ID_Alumno" como nombre de columna, pero
  *    apunta al ID de la INSCRIPCIÓN. "ID_Cliente" enlaza además con el
  *    cliente real — para "regular" es el de su inscripción; para una
  *    recuperación con cliente ya existente, el del cliente elegido; para
  *    clase suelta/prueba sin cliente todavía, queda vacío.)
+ *
+ *    "Clases" es el catálogo de horarios (Centro+Dia+Hora) que existen en
+ *    cada centro, independiente de si ya tienen algún cliente inscrito —
+ *    se gestiona desde el módulo Configuración y es lo que se ofrece al
+ *    dar de alta a un cliente. "Servicios" es la tarifa de suscripción
+ *    (importe mensual según Centro+ClasesSemana) que antes estaba fija en
+ *    el código (TARIFAS) y ahora es editable desde la app.
  *
  * 3. Implementar > Nueva implementación > Aplicación web
  *    - Ejecutar como: Yo
@@ -31,6 +40,9 @@
  *   defecto) para poder dar de baja a un cliente sin ninguna clase asociada.
  * - migrarIdClienteAsistencia: añade "ID_Cliente" a Asistencia, rellenando
  *   el de las filas "regular" existentes a partir de su inscripción.
+ * - migrarAConfiguracion: crea "Clases" (a partir de los horarios ya usados
+ *   en Inscripciones/Asistencia) y "Servicios" (a partir de la tarifa fija
+ *   TARIFAS) sin tocar ningún dato de clientes/inscripciones/pagos.
  */
 
 const SS_ID = '1BAXS6x2qk6GPI5-kmN3LPqtdPntm2g0ex8qQt0IALeY';
@@ -38,9 +50,13 @@ const SHEET_CLIENTES = 'Clientes';
 const SHEET_INSCRIPCIONES = 'Inscripciones';
 const SHEET_PAGOS = 'Pagos';
 const SHEET_ASISTENCIA = 'Asistencia';
+const SHEET_CLASES = 'Clases';
+const SHEET_SERVICIOS = 'Servicios';
 
-// Tarifa de suscripción: cuota mensual según centro y clases/semana. No hay
-// precio por clase suelta — es un abono, no una suma de clases.
+// Tarifa de suscripción de origen (cuota mensual según centro y clases/semana,
+// sin precio por clase suelta). Ya NO se usa en las lecturas en vivo — sirve
+// solo como semilla única para migrarAConfiguracion, que la vuelca en la hoja
+// "Servicios" para que a partir de ahí sea editable desde la app.
 const TARIFAS = {
   'Soma': { 1: 35, 2: 60 },
   'Gema Lanza': { 1: 35, 2: 55 }
@@ -121,7 +137,7 @@ function doGet(e) {
     let result;
     switch (action) {
       case 'ping':
-        result = { version: 'v13-eliminar-blando-y-consultas', ahora: new Date().toISOString() };
+        result = { version: 'v14-configuracion-clases-servicios', ahora: new Date().toISOString() };
         break;
       case 'getClientes':
         result = getClientes();
@@ -140,6 +156,12 @@ function doGet(e) {
         break;
       case 'getSesionesCliente':
         result = getSesionesCliente(e.parameter.idCliente, e.parameter.desde, e.parameter.hasta);
+        break;
+      case 'getClases':
+        result = getClases();
+        break;
+      case 'getServicios':
+        result = getServicios();
         break;
       default:
         throw new Error('Acción GET no reconocida: ' + action);
@@ -200,6 +222,21 @@ function doPost(e) {
       case 'cancelarSesion':
         result = cancelarSesion(body);
         break;
+      case 'addClase':
+        result = addClase(body);
+        break;
+      case 'actualizarClase':
+        result = actualizarClase(body);
+        break;
+      case 'bajaClase':
+        result = bajaClase(body.id);
+        break;
+      case 'reactivarClase':
+        result = reactivarClase(body.id);
+        break;
+      case 'setServicio':
+        result = setServicio(body);
+        break;
       case 'migrarAClientes':
         result = migrarAClientes();
         break;
@@ -211,6 +248,9 @@ function doPost(e) {
         break;
       case 'migrarIdClienteAsistencia':
         result = migrarIdClienteAsistencia();
+        break;
+      case 'migrarAConfiguracion':
+        result = migrarAConfiguracion();
         break;
       case 'repararFormatoPagos':
         result = repararFormatoPagos();
@@ -408,12 +448,130 @@ function setTarifaEspecial(body) {
   return { actualizadas: actualizadas };
 }
 
+// --- Configuración: catálogo de clases (Centro+Dia+Hora) por centro ---
+
+function getClases() {
+  return sheetToObjects_(getSheet_(SHEET_CLASES));
+}
+
+// Añade una clase nueva al catálogo de un centro. No permite duplicar el
+// mismo Centro+Dia+Hora (eso es dar de alta la clase dos veces por error).
+function addClase(body) {
+  const yaExiste = getClases().some(function (c) {
+    return c.Centro === body.centro && c.Dia === body.dia && c.Hora === body.hora;
+  });
+  if (yaExiste) throw new Error('Ya existe esa clase (mismo centro, día y hora)');
+  const sheet = getSheet_(SHEET_CLASES);
+  const nueva = { ID: Utilities.getUuid(), Centro: body.centro, Dia: body.dia, Hora: body.hora, Estado: 'activo' };
+  appendRow_(sheet, nueva);
+  return nueva;
+}
+
+// Corrección puntual de una clase ya creada. OJO: no actualiza en cascada las
+// inscripciones/pagos/asistencia que ya se crearon con el Centro/Dia/Hora
+// anterior (igual que renombrar un cliente no actualiza sus inscripciones).
+function actualizarClase(body) {
+  const sheet = getSheet_(SHEET_CLASES);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const idxId = headers.indexOf('ID');
+  const campos = ['Centro', 'Dia', 'Hora'];
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idxId]) === String(body.id)) {
+      campos.forEach(function (campo) {
+        const clave = campo.charAt(0).toLowerCase() + campo.slice(1);
+        if (body[clave] !== undefined) {
+          sheet.getRange(i + 1, headers.indexOf(campo) + 1).setValue(body[clave]);
+        }
+      });
+      return { updated: true };
+    }
+  }
+  throw new Error('Clase no encontrada');
+}
+
+// Baja/reactivación de una clase del catálogo — no borra el registro (así se
+// conserva el histórico de Cobros/Asistencia de quien ya la tuvo asignada),
+// solo deja de ofrecerse al dar de alta a un cliente nuevo.
+function bajaClase(id) {
+  const sheet = getSheet_(SHEET_CLASES);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const idxId = headers.indexOf('ID');
+  const idxEstado = headers.indexOf('Estado');
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idxId]) === String(id)) {
+      sheet.getRange(i + 1, idxEstado + 1).setValue('inactivo');
+      return { updated: true };
+    }
+  }
+  throw new Error('Clase no encontrada');
+}
+
+function reactivarClase(id) {
+  const sheet = getSheet_(SHEET_CLASES);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const idxId = headers.indexOf('ID');
+  const idxEstado = headers.indexOf('Estado');
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idxId]) === String(id)) {
+      sheet.getRange(i + 1, idxEstado + 1).setValue('activo');
+      return { updated: true };
+    }
+  }
+  throw new Error('Clase no encontrada');
+}
+
+// --- Configuración: servicios (tarifa de suscripción por Centro+ClasesSemana) ---
+
+function getServicios() {
+  return sheetToObjects_(getSheet_(SHEET_SERVICIOS));
+}
+
+// Mapa { centro: { clasesSemana: importe } } a partir de la hoja "Servicios",
+// para no leerla fila a fila cada vez que getPagosMes calcula un importe.
+function getTarifaMapa_() {
+  const mapa = {};
+  getServicios().forEach(function (s) {
+    if (!mapa[s.Centro]) mapa[s.Centro] = {};
+    mapa[s.Centro][Number(s.ClasesSemana)] = Number(s.Importe);
+  });
+  return mapa;
+}
+
+// Crea o actualiza la tarifa de un centro para un número de clases/semana
+// concreto (hoy solo se usan 1 y 2, ver TARIFAS histórico).
+function setServicio(body) {
+  const sheet = getSheet_(SHEET_SERVICIOS);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const idxCentro = headers.indexOf('Centro');
+  const idxClases = headers.indexOf('ClasesSemana');
+  const idxImporte = headers.indexOf('Importe');
+
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][idxCentro] === body.centro && Number(data[i][idxClases]) === Number(body.clasesSemana)) {
+      sheet.getRange(i + 1, idxImporte + 1).setValue(body.importe);
+      return { updated: true };
+    }
+  }
+  appendRow_(sheet, {
+    ID: Utilities.getUuid(), Centro: body.centro, ClasesSemana: Number(body.clasesSemana), Importe: body.importe
+  });
+  return { created: true };
+}
+
 /**
  * Devuelve los pagos de un mes (YYYY-MM). Una fila = un cliente + un centro
  * (no una clase suelta): es una cuota de suscripción. Si un cliente activo
  * ese mes en un centro todavía no tiene fila de pago, se crea con el
  * importe de tarifa según cuántas inscripciones activas tiene en ese centro
- * (1 o 2 clases/semana) — o vacío si tiene marcada tarifa especial.
+ * (1 o 2 clases/semana, según la hoja "Servicios") — o vacío si tiene
+ * marcada tarifa especial.
  */
 function getPagosMes(mes) {
   const sheetPagos = getSheet_(SHEET_PAGOS);
@@ -447,11 +605,12 @@ function getPagosMes(mes) {
   const idsConPago = {};
   pagos.forEach(function (p) { idsConPago[p.ID_Cliente + '|' + p.Centro] = true; });
 
+  const tarifaMapa = getTarifaMapa_();
   Object.keys(grupos).forEach(function (key) {
     if (idsConPago[key]) return;
     const g = grupos[key];
     const cliente = clientePorId[g.idCliente];
-    const tarifaCentro = TARIFAS[g.centro] || {};
+    const tarifaCentro = tarifaMapa[g.centro] || {};
     const importe = g.especial ? '' : (tarifaCentro[g.clases] !== undefined ? tarifaCentro[g.clases] : '');
     const nuevoPago = {
       ID: Utilities.getUuid(),
@@ -879,6 +1038,57 @@ function migrarIdClienteAsistencia() {
     sheet.getRange(2, columna, valores.length, 1).setValues(valores);
   }
   return { migrado: true, filas: filas.length };
+}
+
+/**
+ * Migración única al módulo de Configuración. No toca Clientes/Inscripciones/
+ * Pagos/Asistencia — solo añade dos hojas nuevas si todavía no existen:
+ * 1. "Clases": el catálogo de horarios (Centro+Dia+Hora), extraído de los
+ *    ya usados en Inscripciones y en Asistencia (para no perder ninguno,
+ *    incluido algún horario que solo se usó en una sesión extra).
+ * 2. "Servicios": la tarifa de suscripción, volcando los valores que hasta
+ *    ahora estaban fijos en el código (TARIFAS) para que sean editables
+ *    desde la app sin cambiar ningún importe ya calculado.
+ * Idempotente: si una hoja ya existe, esa parte no hace nada.
+ */
+function migrarAConfiguracion() {
+  const ss = getSS_();
+  const resultado = { clasesCreadas: 0, serviciosCreados: 0 };
+
+  let hojaClases = ss.getSheetByName(SHEET_CLASES);
+  if (!hojaClases) {
+    hojaClases = ss.insertSheet(SHEET_CLASES);
+    hojaClases.appendRow(['ID', 'Centro', 'Dia', 'Hora', 'Estado']);
+
+    const combos = {};
+    getInscripciones().forEach(function (i) {
+      combos[i.Centro + '|' + i.Dia + '|' + i.Hora] = { centro: i.Centro, dia: i.Dia, hora: i.Hora };
+    });
+    sheetToObjects_(getSheet_(SHEET_ASISTENCIA)).forEach(function (a) {
+      if (a.Centro && a.Dia && a.Hora) {
+        combos[a.Centro + '|' + a.Dia + '|' + a.Hora] = { centro: a.Centro, dia: a.Dia, hora: a.Hora };
+      }
+    });
+    Object.keys(combos).forEach(function (key) {
+      const c = combos[key];
+      hojaClases.appendRow([Utilities.getUuid(), c.centro, c.dia, c.hora, 'activo']);
+      resultado.clasesCreadas++;
+    });
+  }
+
+  let hojaServicios = ss.getSheetByName(SHEET_SERVICIOS);
+  if (!hojaServicios) {
+    hojaServicios = ss.insertSheet(SHEET_SERVICIOS);
+    hojaServicios.appendRow(['ID', 'Centro', 'ClasesSemana', 'Importe']);
+    Object.keys(TARIFAS).forEach(function (centro) {
+      Object.keys(TARIFAS[centro]).forEach(function (clases) {
+        hojaServicios.appendRow([Utilities.getUuid(), centro, Number(clases), TARIFAS[centro][clases]]);
+        resultado.serviciosCreados++;
+      });
+    });
+  }
+
+  return resultado;
 }
 
 // Reparación puntual de formato si "migrarASuscripciones" ya se ejecutó
