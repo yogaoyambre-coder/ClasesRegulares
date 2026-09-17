@@ -44,6 +44,11 @@
  *   en Inscripciones/Asistencia) y "Servicios" (a partir de la tarifa fija
  *   TARIFAS) sin tocar ningún dato de clientes/inscripciones/pagos.
  * - migrarMetodoPagoPagos: añade "MetodoPago" a Pagos (vacío por defecto).
+ *
+ * eliminarCliente(id) borra un cliente definitivamente, en cascada con todas
+ * sus inscripciones, pagos y registros de asistencia. Irreversible — para un
+ * cliente real que dejó de venir, usar bajaCliente/bajaInscripcion en su
+ * lugar (conservan el histórico).
  */
 
 const SS_ID = '1BAXS6x2qk6GPI5-kmN3LPqtdPntm2g0ex8qQt0IALeY';
@@ -138,7 +143,7 @@ function doGet(e) {
     let result;
     switch (action) {
       case 'ping':
-        result = { version: 'v15-editar-cliente-y-tarifas-especiales', ahora: new Date().toISOString() };
+        result = { version: 'v16-eliminar-cliente-en-cascada', ahora: new Date().toISOString() };
         break;
       case 'getClientes':
         result = getClientes();
@@ -189,6 +194,9 @@ function doPost(e) {
         break;
       case 'reactivarCliente':
         result = reactivarCliente(body.id);
+        break;
+      case 'eliminarCliente':
+        result = eliminarCliente(body.id);
         break;
       case 'addInscripcion':
         result = addInscripcion(body);
@@ -323,6 +331,52 @@ function reactivarCliente(id) {
     }
   }
   throw new Error('Cliente no encontrado');
+}
+
+// Borrado definitivo y en cascada: a diferencia de bajaCliente (reversible,
+// conserva el histórico), esto borra también todas sus inscripciones, pagos
+// y registros de asistencia. Pensado para fichas erróneas o duplicadas — un
+// cliente real que dejó de venir se da de baja, no se elimina.
+function eliminarCliente(id) {
+  const sheetClientes = getSheet_(SHEET_CLIENTES);
+  const dataClientes = sheetClientes.getDataRange().getValues();
+  const idxIdClientes = dataClientes[0].indexOf('ID');
+  let filaCliente = -1;
+  for (let i = 1; i < dataClientes.length; i++) {
+    if (String(dataClientes[i][idxIdClientes]) === String(id)) { filaCliente = i + 1; break; }
+  }
+  if (filaCliente === -1) throw new Error('Cliente no encontrado');
+
+  const inscripcionesBorradas = eliminarFilasPorIdCliente_(SHEET_INSCRIPCIONES, id);
+  const pagosBorrados = eliminarFilasPorIdCliente_(SHEET_PAGOS, id);
+  const asistenciasBorradas = eliminarFilasPorIdCliente_(SHEET_ASISTENCIA, id);
+
+  sheetClientes.deleteRow(filaCliente);
+
+  return {
+    deleted: true,
+    inscripcionesBorradas: inscripcionesBorradas,
+    pagosBorrados: pagosBorrados,
+    asistenciasBorradas: asistenciasBorradas
+  };
+}
+
+// Borra (de abajo hacia arriba, para no desajustar índices) todas las filas
+// de una hoja cuyo ID_Cliente coincida. Si la hoja no tiene esa columna
+// (no debería pasar en ninguna de las que se usan aquí) no hace nada.
+function eliminarFilasPorIdCliente_(nombreHoja, idCliente) {
+  const sheet = getSheet_(nombreHoja);
+  const data = sheet.getDataRange().getValues();
+  const idxIdCliente = data[0].indexOf('ID_Cliente');
+  if (idxIdCliente === -1) return 0;
+  let borradas = 0;
+  for (let i = data.length - 1; i >= 1; i--) {
+    if (data[i][idxIdCliente] && String(data[i][idxIdCliente]) === String(idCliente)) {
+      sheet.deleteRow(i + 1);
+      borradas++;
+    }
+  }
+  return borradas;
 }
 
 function actualizarCliente(body) {

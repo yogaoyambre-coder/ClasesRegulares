@@ -1374,11 +1374,20 @@ function abrirModalEditarCliente(id) {
   });
 
   const sinClases = Object.keys(porCentro).length === 0;
+  const deBajaDelTodo = clienteDeBajaDelTodo(cliente);
+
+  // Acciones a nivel de cliente (no de una clase concreta): dar de baja o
+  // reactivar el cliente entero, y eliminarlo por completo. Solo tienen
+  // sentido cuando no le queda ningún grupo activo en ningún centro — si
+  // tiene, se gestiona clase a clase con "Dar de baja este grupo".
+  const accionesCliente = '' +
+    (cliente.Estado === 'baja'
+      ? '<button class="btn btn-primary btn-block" id="reactivar-cliente-btn">Reactivar cliente</button>'
+      : '<button class="btn btn-danger btn-block" id="baja-cliente-btn">Dar de baja a este cliente</button>') +
+    '<button class="btn btn-secondary btn-block" id="eliminar-cliente-btn">Eliminar definitivamente</button>';
+
   const contenidoCentros = sinClases
-    ? '<p class="empty-state">Todavía no tiene ninguna clase asociada.</p>' +
-      (cliente.Estado === 'baja'
-        ? '<button class="btn btn-primary btn-block" id="reactivar-cliente-btn">Reactivar cliente</button>'
-        : '<button class="btn btn-danger btn-block" id="baja-cliente-btn">Dar de baja a este cliente</button>')
+    ? '<p class="empty-state">Todavía no tiene ninguna clase asociada.</p>' + accionesCliente
     : Object.keys(porCentro).sort().map(function (centro) {
         const grupo = porCentro[centro];
         const activasCentro = grupo.filter(function (i) { return i.Estado === 'activo'; });
@@ -1397,7 +1406,7 @@ function abrirModalEditarCliente(id) {
                     '<button class="btn btn-danger btn-block" data-baja-insc="' + i.ID + '">Dar de baja este grupo</button>' +
                   '</div>';
               }).join(''));
-      }).join('');
+      }).join('') + (deBajaDelTodo ? accionesCliente : '');
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
@@ -1477,6 +1486,14 @@ function abrirModalEditarCliente(id) {
     });
   }
 
+  const btnEliminarCliente = document.getElementById('eliminar-cliente-btn');
+  if (btnEliminarCliente) {
+    btnEliminarCliente.addEventListener('click', function () {
+      overlay.remove();
+      abrirModalEliminarCliente(id, cliente.Nombre);
+    });
+  }
+
   overlay.querySelectorAll('[data-baja-insc]').forEach(function (btn) {
     btn.addEventListener('click', async function () {
       try {
@@ -1503,6 +1520,37 @@ function abrirModalEditarCliente(id) {
         chk.checked = !chk.checked;
       }
     });
+  });
+}
+
+// --- Modal: eliminar definitivamente un cliente (en cascada) ---
+
+function abrirModalEliminarCliente(id, nombre) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = '' +
+    '<div class="modal-sheet">' +
+      '<h2>Eliminar cliente</h2>' +
+      '<p>Se borrará por completo la ficha de "' + nombre + '", junto con todas sus inscripciones, pagos y registros de asistencia. No se puede deshacer.</p>' +
+      '<p class="alumno-meta">Úsalo solo para fichas erróneas o duplicadas. Si es un cliente real que dejó de venir, mejor "Dar de baja" — conserva su histórico.</p>' +
+      '<div class="modal-actions">' +
+        '<button class="btn btn-secondary" id="cancelar-elcli">Cancelar</button>' +
+        '<button class="btn btn-danger" id="confirmar-elcli-btn">Eliminar definitivamente</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+
+  document.getElementById('cancelar-elcli').addEventListener('click', function () { overlay.remove(); });
+  document.getElementById('confirmar-elcli-btn').addEventListener('click', async function () {
+    try {
+      await apiPost('eliminarCliente', { id: id });
+      mostrarToast('Cliente eliminado');
+      overlay.remove();
+      await Promise.all([cargarAlumnos(), cargarClientes()]);
+      render();
+    } catch (err) {
+      mostrarToast('Error: ' + err.message);
+    }
   });
 }
 
