@@ -542,14 +542,22 @@ function renderConfiguracionClasesCentro(centro) {
     '<button class="btn btn-secondary btn-block" data-accion="abrir-nueva-clase" data-centro="' + centro + '">+ Nueva clase en ' + centro + '</button>';
 }
 
+function alumnosDeClase(clase) {
+  return state.alumnos.filter(function (a) {
+    return a.Centro === clase.Centro && a.Dia === clase.Dia && a.Hora === clase.Hora && a.Estado === 'activo';
+  });
+}
+
 function renderConfiguracionClaseCard(c) {
   const activa = c.Estado === 'activo';
+  const numAlumnos = alumnosDeClase(c).length;
   return '' +
     '<div class="card alumno-card ' + (activa ? '' : 'cancelada') + '">' +
       '<div class="alumno-top">' +
         '<span class="alumno-nombre">' + c.Dia + ' ' + c.Hora + (activa ? '' : ' <span class="alumno-meta">(inactiva)</span>') + '</span>' +
       '</div>' +
       '<div class="alumno-controls">' +
+        '<button class="back-link" data-accion="ver-alumnos-clase" data-id="' + c.ID + '">Alumnos (' + numAlumnos + ')</button>' +
         '<button class="back-link" data-accion="editar-clase" data-id="' + c.ID + '">Editar</button>' +
         '<button class="btn-danger-link" data-accion="' + (activa ? 'baja-clase' : 'reactivar-clase') + '" data-id="' + c.ID + '">' +
           (activa ? 'Desactivar' : 'Reactivar') +
@@ -900,6 +908,10 @@ function bindScreenEvents() {
           mostrarToast('Error: ' + err.message);
         }
       });
+    } else if (accion === 'ver-alumnos-clase') {
+      el.addEventListener('click', function () {
+        abrirModalAlumnosClase(el.dataset.id);
+      });
     } else if (accion === 'editar-clase') {
       el.addEventListener('click', function () {
         abrirModalEditarClase(el.dataset.id);
@@ -1083,6 +1095,90 @@ function abrirModalEliminarClase(id, nombre) {
     } catch (err) {
       mostrarToast('Error: ' + err.message);
     }
+  });
+}
+
+// --- Modal: alumnos de una clase (verlos, quitarlos, añadir uno existente) ---
+// Segunda puerta a la misma acción que "Editar cliente → Añadir/Quitar clase",
+// pero organizada por clase en vez de por cliente — útil al gestionar un grupo
+// entero desde Configuración.
+
+function abrirModalAlumnosClase(claseId) {
+  const clase = state.clases.find(function (c) { return String(c.ID) === String(claseId); });
+  if (!clase) return;
+
+  const enGrupo = alumnosDeClase(clase).slice().sort(function (a, b) { return a.Nombre.localeCompare(b.Nombre); });
+  const idsEnGrupo = {};
+  enGrupo.forEach(function (a) { idsEnGrupo[String(a.ID_Cliente)] = true; });
+
+  const disponibles = state.clientes
+    .filter(function (c) { return !idsEnGrupo[String(c.ID)]; })
+    .sort(function (a, b) { return a.Nombre.localeCompare(b.Nombre); });
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = '' +
+    '<div class="modal-sheet">' +
+      '<h2>Alumnos — ' + clase.Centro + ' ' + clase.Dia + ' ' + clase.Hora + '</h2>' +
+      (enGrupo.length === 0
+        ? '<p class="empty-state">Nadie inscrito en esta clase todavía.</p>'
+        : enGrupo.map(function (a) {
+            return '' +
+              '<div class="card alumno-card pendiente">' +
+                '<div class="alumno-top">' +
+                  '<span class="alumno-nombre">' + a.Nombre + '</span>' +
+                  '<button class="btn-danger-link" data-quitar-insc="' + a.ID + '">Quitar</button>' +
+                '</div>' +
+              '</div>';
+          }).join('')) +
+      '<div class="field"><label>Añadir alumno existente</label>' +
+        (disponibles.length === 0
+          ? '<p class="alumno-meta">No hay más clientes disponibles para añadir.</p>'
+          : '<select id="ac-cliente">' +
+              disponibles.map(function (c) {
+                return '<option value="' + c.ID + '">' + c.Nombre + (c.Referencia ? ' (' + c.Referencia + ')' : '') + '</option>';
+              }).join('') +
+            '</select>') +
+      '</div>' +
+      '<div class="modal-actions">' +
+        '<button class="btn btn-secondary" id="cerrar-alumnos-clase">Cerrar</button>' +
+        (disponibles.length === 0 ? '' : '<button class="btn btn-primary" id="anadir-alumno-clase-btn">Añadir</button>') +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+
+  document.getElementById('cerrar-alumnos-clase').addEventListener('click', function () { overlay.remove(); });
+
+  const btnAnadir = document.getElementById('anadir-alumno-clase-btn');
+  if (btnAnadir) {
+    btnAnadir.addEventListener('click', async function () {
+      const idCliente = document.getElementById('ac-cliente').value;
+      try {
+        await apiPost('addInscripcion', {
+          idCliente: idCliente, centro: clase.Centro, dia: clase.Dia, hora: clase.Hora, fechaAlta: hoyISO()
+        });
+        mostrarToast('Añadido/a al grupo');
+        overlay.remove();
+        await Promise.all([cargarAlumnos(), cargarClientes()]);
+        abrirModalAlumnosClase(claseId);
+      } catch (err) {
+        mostrarToast('Error: ' + err.message);
+      }
+    });
+  }
+
+  overlay.querySelectorAll('[data-quitar-insc]').forEach(function (btn) {
+    btn.addEventListener('click', async function () {
+      try {
+        await apiPost('bajaInscripcion', { id: btn.dataset.quitarInsc, fechaBaja: hoyISO() });
+        mostrarToast('Quitado/a del grupo');
+        overlay.remove();
+        await cargarAlumnos();
+        abrirModalAlumnosClase(claseId);
+      } catch (err) {
+        mostrarToast('Error: ' + err.message);
+      }
+    });
   });
 }
 
